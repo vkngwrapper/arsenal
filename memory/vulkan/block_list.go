@@ -1,9 +1,10 @@
-package memory
+package vulkan
 
 import (
 	"fmt"
 	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/vkngwrapper/arsenal/memory"
 	"github.com/vkngwrapper/arsenal/memory/internal/metadata"
 	"github.com/vkngwrapper/arsenal/memory/internal/utils"
 	"github.com/vkngwrapper/arsenal/memory/internal/vulkan"
@@ -31,7 +32,7 @@ type memoryBlockList struct {
 	bufferImageGranularity int
 
 	explicitBlockSize      bool
-	algorithm              PoolCreateFlags
+	algorithm              memory.PoolCreateFlags
 	priority               float32
 	minAllocationAlignment uint
 
@@ -46,7 +47,7 @@ type memoryBlockList struct {
 func (l *memoryBlockList) MemoryTypeIndex() int                { return l.memoryTypeIndex }
 func (l *memoryBlockList) PreferredBlockSize() int             { return l.preferredBlockSize }
 func (l *memoryBlockList) BufferImageGranularity() int         { return l.bufferImageGranularity }
-func (l *memoryBlockList) Algorithm() PoolCreateFlags          { return l.algorithm }
+func (l *memoryBlockList) Algorithm() memory.PoolCreateFlags   { return l.algorithm }
 func (l *memoryBlockList) HasExplicitBlockSize() bool          { return l.explicitBlockSize }
 func (l *memoryBlockList) Priority() float32                   { return l.priority }
 func (l *memoryBlockList) AllocateNextPointer() unsafe.Pointer { return l.memoryAllocateNext }
@@ -60,7 +61,7 @@ func (l *memoryBlockList) Init(
 	minBlockCount, maxBlockCount int,
 	bufferImageGranularity int,
 	explicitBlockSize bool,
-	algorithm PoolCreateFlags,
+	algorithm memory.PoolCreateFlags,
 	priority float32,
 	minAllocationAlignment uint,
 	extensionData *vulkan.ExtensionData,
@@ -115,7 +116,7 @@ func (l *memoryBlockList) CreateMinBlocks() (common.VkResult, error) {
 	return core1_0.VKSuccess, nil
 }
 
-func (l *memoryBlockList) AddStatistics(stats *Statistics) {
+func (l *memoryBlockList) AddStatistics(stats *memory.Statistics) {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 
@@ -128,7 +129,7 @@ func (l *memoryBlockList) AddStatistics(stats *Statistics) {
 	}
 }
 
-func (l *memoryBlockList) AddDetailedStatistics(stats *DetailedStatistics) {
+func (l *memoryBlockList) AddDetailedStatistics(stats *memory.DetailedStatistics) {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 
@@ -207,11 +208,11 @@ func (l *memoryBlockList) Remove(block *deviceMemoryBlock) error {
 func (l *memoryBlockList) IsCorruptionDetectionEnabled() bool {
 	requiredMemFlags := core1_0.MemoryPropertyHostVisible | core1_0.MemoryPropertyHostCoherent
 	return utils.DebugMargin > 0 &&
-		(l.algorithm == 0 || l.algorithm == PoolCreateLinearAlgorithm) &&
+		(l.algorithm == 0 || l.algorithm == memory.PoolCreateLinearAlgorithm) &&
 		l.deviceMemory.MemoryTypeProperties(l.memoryTypeIndex).PropertyFlags&requiredMemFlags == requiredMemFlags
 }
 
-func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *AllocationCreateInfo, suballocType metadata.SuballocationType, allocations []Allocation) (res common.VkResult, err error) {
+func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *memory.AllocationCreateInfo, suballocType metadata.SuballocationType, allocations []Allocation) (res common.VkResult, err error) {
 	if l.minAllocationAlignment > alignment {
 		alignment = l.minAllocationAlignment
 	}
@@ -246,7 +247,7 @@ func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *Allocat
 	return res, err
 }
 
-func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *AllocationCreateInfo, suballocType metadata.SuballocationType, allocs []Allocation) (res common.VkResult, err error) {
+func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *memory.AllocationCreateInfo, suballocType metadata.SuballocationType, allocs []Allocation) (res common.VkResult, err error) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 
@@ -273,8 +274,8 @@ func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *Alloc
 	return core1_0.VKSuccess, nil
 }
 
-func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *AllocationCreateInfo, suballocationType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
-	isUpperAddress := createInfo.Flags&AllocationCreateUpperAddress != 0
+func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *memory.AllocationCreateInfo, suballocationType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
+	isUpperAddress := createInfo.Flags&memory.AllocationCreateUpperAddress != 0
 
 	var res common.VkResult
 	var err error
@@ -292,14 +293,14 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 	}
 
 	canFallbackToDedicated := !l.HasExplicitBlockSize() &&
-		createInfo.Flags&AllocationCreateNeverAllocate == 0
-	canCreateNewBlock := createInfo.Flags&AllocationCreateNeverAllocate == 0 &&
+		createInfo.Flags&memory.AllocationCreateNeverAllocate == 0
+	canCreateNewBlock := createInfo.Flags&memory.AllocationCreateNeverAllocate == 0 &&
 		len(l.blocks) < l.maxBlockCount &&
 		(freeMemory >= size || !canFallbackToDedicated)
-	strategy := createInfo.Flags & AllocationCreateStrategyMask
+	strategy := createInfo.Flags & memory.AllocationCreateStrategyMask
 
 	// Upper address can only be used with linear allocator and within a single memory blcok
-	if isUpperAddress && (l.algorithm != PoolCreateLinearAlgorithm || l.maxBlockCount > 1) {
+	if isUpperAddress && (l.algorithm != memory.PoolCreateLinearAlgorithm || l.maxBlockCount > 1) {
 		return core1_0.VKErrorFeatureNotPresent, core1_0.VKErrorFeatureNotPresent.ToError()
 	}
 
@@ -309,7 +310,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 	}
 
 	// 1. Search existing allocations & try to do an allocation
-	if l.algorithm == PoolCreateLinearAlgorithm {
+	if l.algorithm == memory.PoolCreateLinearAlgorithm {
 		// Only use the last block in linear
 		if len(l.blocks) != 0 {
 			currentBlock := l.blocks[len(l.blocks)-1]
@@ -325,13 +326,13 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 			return res, err
 
 		}
-	} else if strategy != AllocationCreateStrategyMinTime {
+	} else if strategy != memory.AllocationCreateStrategyMinTime {
 		// Iterate forward through the blocks to find the smallest/best block where this will fit
 
 		if l.deviceMemory.MemoryTypeProperties(l.memoryTypeIndex).PropertyFlags&core1_0.MemoryPropertyHostVisible != 0 {
 			// Host-visible
 
-			isMappingAllowed := createInfo.Flags&(AllocationCreateHostAccessSequentialWrite|AllocationCreateHostAccessRandom) != 0
+			isMappingAllowed := createInfo.Flags&(memory.AllocationCreateHostAccessSequentialWrite|memory.AllocationCreateHostAccessRandom) != 0
 
 			/*
 				For non-mappable allocations, check blocks that are not mapped first. For mappable allocations,
@@ -544,7 +545,7 @@ func (l *memoryBlockList) hasEmptyBlock() bool {
 }
 
 func (l *memoryBlockList) incrementallySortBlocks() {
-	if !l.incrementalSort || l.algorithm == PoolCreateLinearAlgorithm {
+	if !l.incrementalSort || l.algorithm == memory.PoolCreateLinearAlgorithm {
 		return
 	}
 
@@ -571,8 +572,8 @@ func (l *memoryBlockList) calcMaxBlockSize() int {
 	return result
 }
 
-func (l *memoryBlockList) allocFromBlock(block *deviceMemoryBlock, size int, alignment uint, allocFlags AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, strategy AllocationCreateFlags, outAlloc *Allocation) (common.VkResult, error) {
-	isUpperAddress := allocFlags&AllocationCreateUpperAddress != 0
+func (l *memoryBlockList) allocFromBlock(block *deviceMemoryBlock, size int, alignment uint, allocFlags memory.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, strategy memory.AllocationCreateFlags, outAlloc *Allocation) (common.VkResult, error) {
+	isUpperAddress := allocFlags&memory.AllocationCreateUpperAddress != 0
 
 	var currRequest metadata.AllocationRequest
 	success, err := block.metadata.PopulateAllocationRequest(size, alignment, isUpperAddress, suballocType, strategy, &currRequest)
@@ -585,9 +586,9 @@ func (l *memoryBlockList) allocFromBlock(block *deviceMemoryBlock, size int, ali
 	return l.commitAllocationRequest(&currRequest, block, alignment, allocFlags, userData, suballocType, outAlloc)
 }
 
-func (l *memoryBlockList) commitAllocationRequest(allocRequest *metadata.AllocationRequest, block *deviceMemoryBlock, alignment uint, allocFlags AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
-	mapped := allocFlags&AllocationCreateMapped != 0
-	isMappingAllowed := allocFlags&(AllocationCreateHostAccessSequentialWrite|AllocationCreateHostAccessRandom) != 0
+func (l *memoryBlockList) commitAllocationRequest(allocRequest *metadata.AllocationRequest, block *deviceMemoryBlock, alignment uint, allocFlags memory.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
+	mapped := allocFlags&memory.AllocationCreateMapped != 0
+	isMappingAllowed := allocFlags&(memory.AllocationCreateHostAccessSequentialWrite|memory.AllocationCreateHostAccessRandom) != 0
 
 	block.memory.RecordSuballocSubfree()
 

@@ -1,8 +1,9 @@
-package memory
+package vulkan
 
 import (
 	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/vkngwrapper/arsenal/memory"
 	"github.com/vkngwrapper/arsenal/memory/internal/utils"
 )
 
@@ -40,7 +41,7 @@ func (l *dedicatedAllocationList) Validate() error {
 	return nil
 }
 
-func (l *dedicatedAllocationList) AddDetailedStatistics(stats *DetailedStatistics) error {
+func (l *dedicatedAllocationList) AddDetailedStatistics(stats *memory.DetailedStatistics) error {
 	var err error
 	for item := l.allocationListHead; item != nil; item, err = item.nextDedicatedAlloc() {
 		if err != nil {
@@ -56,7 +57,7 @@ func (l *dedicatedAllocationList) AddDetailedStatistics(stats *DetailedStatistic
 	return nil
 }
 
-func (l *dedicatedAllocationList) AddStatistics(stats *Statistics) error {
+func (l *dedicatedAllocationList) AddStatistics(stats *memory.Statistics) error {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 

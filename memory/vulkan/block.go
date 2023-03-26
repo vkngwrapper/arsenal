@@ -1,8 +1,9 @@
-package memory
+package vulkan
 
 import (
 	stderr "errors"
 	"fmt"
+	"github.com/vkngwrapper/arsenal/memory"
 
 	"github.com/cockroachdb/errors"
 	"github.com/vkngwrapper/arsenal/memory/internal/metadata"
@@ -30,7 +31,7 @@ func (b *deviceMemoryBlock) Init(
 	newMemory *vulkan.SynchronizedMemory,
 	newSize int,
 	id int,
-	algorithm PoolCreateFlags,
+	algorithm memory.PoolCreateFlags,
 	bufferImageGranularity int,
 ) error {
 	if b.memory != nil {
@@ -47,7 +48,7 @@ func (b *deviceMemoryBlock) Init(
 	case 0:
 		b.metadata = metadata.NewTLSFBlockMetadata(bufferImageGranularity, false)
 		break
-	case PoolCreateLinearAlgorithm:
+	case memory.PoolCreateLinearAlgorithm:
 		b.metadata = metadata.NewLinearBlockMetadata(bufferImageGranularity, false)
 		break
 	default:

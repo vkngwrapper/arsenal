@@ -170,7 +170,8 @@ func (m *DeviceMemoryProperties) RemoveBlockAllocation(heapIndex, allocationSize
 		panic(fmt.Sprintf("block count budget for heapIndex %d went negative", heapIndex))
 	}
 
-	atomic.AddUint32(&m.blockCount[heapIndex], -1)
+	// Decrement
+	atomic.AddUint32(&m.blockCount[heapIndex], ^uint32(0))
 }
 
 func (m *DeviceMemoryProperties) AllocateVulkanMemory(
@@ -180,7 +181,8 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	defer func() {
 		// If we failed out, roll back the device increment
 		if err != nil {
-			atomic.AddUint32(&m.memoryCount, -1)
+			// Decrement
+			atomic.AddUint32(&m.memoryCount, ^uint32(0))
 		}
 	}()
 
@@ -251,7 +253,8 @@ func (m *DeviceMemoryProperties) FreeVulkanMemory(memoryType int, size int, memo
 
 	heapIndex := m.MemoryTypeIndexToHeapIndex(memoryType)
 	m.RemoveBlockAllocation(heapIndex, size)
-	atomic.AddUint32(&m.memoryCount, -1)
+	// Decrement
+	atomic.AddUint32(&m.memoryCount, ^uint32(0))
 }
 
 func (m *DeviceMemoryProperties) ExternalMemoryTypes(memoryTypeIndex int) khr_external_memory_capabilities.ExternalMemoryHandleTypeFlags {
@@ -274,15 +277,33 @@ func (m *DeviceMemoryProperties) HeapBudgets(firstHeap int, budgets []Budget) {
 	}
 }
 
-func (m *DeviceMemoryProperties) FlushOrInvalidateAllocations(memRanges []core1_0.MappedMemoryRange, operation memory.CacheOperation) (common.VkResult, error) {
+type CacheOperation uint32
+
+const (
+	CacheOperationFlush CacheOperation = iota
+	CacheOperationInvalidate
+)
+
+var cacheOperationMapping = make(map[CacheOperation]string)
+
+func (o CacheOperation) String() string {
+	return cacheOperationMapping[o]
+}
+
+func init() {
+	cacheOperationMapping[CacheOperationFlush] = "CacheOperationFlush"
+	cacheOperationMapping[CacheOperationInvalidate] = "CacheOperationInvalidate"
+}
+
+func (m *DeviceMemoryProperties) FlushOrInvalidateAllocations(memRanges []core1_0.MappedMemoryRange, operation CacheOperation) (common.VkResult, error) {
 	if len(memRanges) == 0 {
 		return core1_0.VKSuccess, nil
 	}
 
 	switch operation {
-	case memory.CacheOperationFlush:
+	case CacheOperationFlush:
 		return m.device.FlushMappedMemoryRanges(memRanges)
-	case memory.CacheOperationInvalidate:
+	case CacheOperationInvalidate:
 		return m.device.InvalidateMappedMemoryRanges(memRanges)
 	}
 

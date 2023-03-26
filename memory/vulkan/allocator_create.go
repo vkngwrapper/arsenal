@@ -1,7 +1,8 @@
-package memory
+package vulkan
 
 import (
 	"github.com/cockroachdb/errors"
+	"github.com/vkngwrapper/arsenal/memory"
 	"github.com/vkngwrapper/arsenal/memory/internal/utils"
 	"github.com/vkngwrapper/arsenal/memory/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
@@ -58,7 +59,7 @@ type CreateOptions struct {
 	// MemoryCallbackOptions is an optional set of callbacks that will be executed when Vulkan memory
 	// is allocated from this allocator. It can be helpful in cases when the consumer requires allocator-
 	// level info about allocated memory
-	MemoryCallbackOptions *MemoryCallbackOptions
+	MemoryCallbackOptions *memory.MemoryCallbackOptions
 
 	// HeapSizeLimits can be left empty. If it is provided, though, it must be a slice
 	// with a number of entries corresponding to the number of heaps in the PhysicalDevice

@@ -4,7 +4,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/vkngwrapper/arsenal/memory"
-	"github.com/vkngwrapper/arsenal/memory/internal/metadata/request"
 	"github.com/vkngwrapper/arsenal/memory/internal/utils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -347,7 +346,7 @@ func (m *tlsfBlockMetadata) PopulateAllocationRequest(
 	upperAddress bool,
 	allocType SuballocationType,
 	strategy memory.AllocationCreateFlags,
-	allocRequest *request.AllocationRequest,
+	allocRequest *AllocationRequest,
 ) (bool, error) {
 	if allocSize < 1 {
 		return false, errors.Newf("Invalid allocSize: %d", allocSize)
@@ -566,7 +565,7 @@ func (m *tlsfBlockMetadata) checkBlock(
 	allocSize int,
 	allocAlignment uint,
 	allocType SuballocationType,
-	allocRequest *request.AllocationRequest,
+	allocRequest *AllocationRequest,
 ) (bool, error) {
 	if !block.IsFree() {
 		return false, errors.Newf("block at offset %d is already taken", block.offset)
@@ -589,7 +588,7 @@ func (m *tlsfBlockMetadata) checkBlock(
 	}
 
 	// Alloc will work
-	allocRequest.Type = request.AllocationRequestTLSF
+	allocRequest.Type = AllocationRequestTLSF
 	allocRequest.BlockAllocationHandle = block.blockHandle
 	allocRequest.Size = allocSize
 	allocRequest.CustomData = allocType
@@ -615,17 +614,17 @@ func (m *tlsfBlockMetadata) checkBlock(
 
 func (m *tlsfBlockMetadata) findFreeBlock(size int, listIndex int) (*tlsfBlock, int, error) {
 	memoryClass := m.sizeToMemoryClass(size)
-	innerFreeMap := m.innerIsFreeBitmap[memoryClass] & (math.MaxUint << m.sizeToSecondIndex(size, memoryClass))
+	innerFreeMap := m.innerIsFreeBitmap[memoryClass] & (math.MaxUint32 << m.sizeToSecondIndex(size, memoryClass))
 
 	if innerFreeMap == 0 {
 		// Check higher levels for available blocks
-		freeMap := m.isFreeBitmap & (math.MaxUint << (memoryClass + 1))
+		freeMap := m.isFreeBitmap & (math.MaxUint32 << (memoryClass + 1))
 		if freeMap == 0 {
 			return nil, listIndex, nil
 		}
 
 		// Find lowest free region
-		memoryClass = bits.TrailingZeros(freeMap)
+		memoryClass = bits.TrailingZeros(uint(freeMap))
 		innerFreeMap = m.innerIsFreeBitmap[memoryClass]
 		if innerFreeMap == 0 {
 			return nil, listIndex, errors.New("free bitmap is in an invalid state")
@@ -633,7 +632,7 @@ func (m *tlsfBlockMetadata) findFreeBlock(size int, listIndex int) (*tlsfBlock, 
 	}
 
 	// Find lowest free subregion
-	listIndex = m.getListIndex(memoryClass, bits.TrailingZeros(innerFreeMap))
+	listIndex = m.getListIndex(memoryClass, bits.TrailingZeros(uint(innerFreeMap)))
 	if m.freeList[listIndex] == nil {
 		return nil, listIndex, errors.Newf("free list index %d was listed as having free blocks, but no blocks were in the free list", listIndex)
 	}
@@ -676,8 +675,8 @@ func (m *tlsfBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.Vk
 	return core1_0.VKSuccess, nil
 }
 
-func (m *tlsfBlockMetadata) Alloc(req *request.AllocationRequest, suballocType SuballocationType, userData any) error {
-	if req.Type != request.AllocationRequestTLSF {
+func (m *tlsfBlockMetadata) Alloc(req *AllocationRequest, suballocType SuballocationType, userData any) error {
+	if req.Type != AllocationRequestTLSF {
 		return errors.New("allocation request was received by an incompatible metadata")
 	}
 

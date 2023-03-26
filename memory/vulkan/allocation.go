@@ -1,9 +1,10 @@
-package memory
+package vulkan
 
 import (
 	"fmt"
 	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/vkngwrapper/arsenal/memory"
 	"github.com/vkngwrapper/arsenal/memory/internal/metadata"
 	"github.com/vkngwrapper/arsenal/memory/internal/utils"
 	"github.com/vkngwrapper/arsenal/memory/internal/vulkan"
@@ -52,7 +53,7 @@ type BlockData struct {
 }
 
 type DedicatedData struct {
-	parentPool Pool
+	parentPool memory.Pool
 	nextAlloc  *Allocation
 	prevAlloc  *Allocation
 }
@@ -131,7 +132,7 @@ func (a *Allocation) initBlockAllocation(
 }
 
 func (a *Allocation) initDedicatedAllocation(
-	parentPool Pool,
+	parentPool memory.Pool,
 	memoryTypeIndex int,
 	memory *vulkan.SynchronizedMemory,
 	suballocationType metadata.SuballocationType,
@@ -333,7 +334,7 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 	return false, errors.Newf("attempted to get the flush or invalidate range of an allocation with invalid type %s", a.allocationType.String())
 }
 
-func (a *Allocation) FlushOrInvalidateAllocation(offset, size int, operation CacheOperation) (common.VkResult, error) {
+func (a *Allocation) FlushOrInvalidateAllocation(offset, size int, operation vulkan.CacheOperation) (common.VkResult, error) {
 	var memRange core1_0.MappedMemoryRange
 	success, err := a.flushOrInvalidateRange(offset, size, &memRange)
 	if err != nil {
@@ -359,10 +360,10 @@ func (a *Allocation) fillAllocation(pattern uint8) (common.VkResult, error) {
 	}
 
 	for i := 0; i < a.size; i++ {
-		*data = pattern
+		*(*uint8)(data) = pattern
 		data = unsafe.Add(data, 1)
 	}
-	res, err = a.FlushOrInvalidateAllocation(0, -1, CacheOperationFlush)
+	res, err = a.FlushOrInvalidateAllocation(0, -1, vulkan.CacheOperationFlush)
 	if err != nil {
 		return res, err
 	}
