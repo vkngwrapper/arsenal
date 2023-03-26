@@ -4,12 +4,11 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/vkngwrapper/arsenal/memory"
-	"github.com/vkngwrapper/arsenal/memory/allocation"
+	"github.com/vkngwrapper/arsenal/memory/internal/metadata/request"
 	"github.com/vkngwrapper/arsenal/memory/internal/utils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/driver"
-	"log"
+	"golang.org/x/exp/slog"
 	"math"
 	"math/bits"
 	"sync"
@@ -34,7 +33,7 @@ type tlsfBlock struct {
 	nextFree *tlsfBlock
 
 	userData    any
-	blockHandle allocation.BlockAllocationHandle
+	blockHandle BlockAllocationHandle
 }
 
 func (b *tlsfBlock) MarkFree() {
@@ -60,8 +59,8 @@ type tlsfBlockMetadata struct {
 	innerIsFreeBitmap [MaxMemoryClasses]uint32
 	listsCount        int
 
-	nextAllocationHandle allocation.BlockAllocationHandle
-	handleKey            map[allocation.BlockAllocationHandle]*tlsfBlock
+	nextAllocationHandle BlockAllocationHandle
+	handleKey            map[BlockAllocationHandle]*tlsfBlock
 	freeList             []*tlsfBlock
 	nullBlock            *tlsfBlock
 	granularityHandler   BlockBufferImageGranularity
@@ -70,9 +69,9 @@ type tlsfBlockMetadata struct {
 
 var _ BlockMetadata = &tlsfBlockMetadata{}
 
-func NewTLSFBlockMetadata(allocationCallbacks *driver.AllocationCallbacks, bufferImageGranularity int, isVirtual bool) *tlsfBlockMetadata {
+func NewTLSFBlockMetadata(bufferImageGranularity int, isVirtual bool) *tlsfBlockMetadata {
 	return &tlsfBlockMetadata{
-		blockMetadataBase: newBlockMetadata(allocationCallbacks, bufferImageGranularity, isVirtual),
+		blockMetadataBase: newBlockMetadata(bufferImageGranularity, isVirtual),
 
 		blockAllocator: sync.Pool{
 			New: func() any {
@@ -91,7 +90,7 @@ func (m *tlsfBlockMetadata) allocateBlock() *tlsfBlock {
 	b.nextFree = nil
 	b.prevFree = nil
 	b.userData = nil
-	b.blockHandle = allocation.BlockAllocationHandle(atomic.AddUint64((*uint64)(&m.nextAllocationHandle), 1))
+	b.blockHandle = BlockAllocationHandle(atomic.AddUint64((*uint64)(&m.nextAllocationHandle), 1))
 	m.handleKey[b.blockHandle] = b
 	return b
 }
@@ -101,7 +100,7 @@ func (m *tlsfBlockMetadata) freeBlock(b *tlsfBlock) {
 	m.blockAllocator.Put(b)
 }
 
-func (m *tlsfBlockMetadata) getBlock(handle allocation.BlockAllocationHandle) (*tlsfBlock, error) {
+func (m *tlsfBlockMetadata) getBlock(handle BlockAllocationHandle) (*tlsfBlock, error) {
 	block, ok := m.handleKey[handle]
 	if !ok {
 		return nil, errors.New("received a handle that was incompatible with this metadata")
@@ -135,7 +134,7 @@ func (m *tlsfBlockMetadata) Init(size int) {
 
 	m.memoryClasses = memoryClass + 2
 	m.freeList = make([]*tlsfBlock, listSize)
-	m.handleKey = make(map[allocation.BlockAllocationHandle]*tlsfBlock)
+	m.handleKey = make(map[BlockAllocationHandle]*tlsfBlock)
 }
 
 func (m *tlsfBlockMetadata) Validate() error {
@@ -346,9 +345,9 @@ func (m *tlsfBlockMetadata) sizeToSecondIndex(size int, memoryClass int) int {
 func (m *tlsfBlockMetadata) PopulateAllocationRequest(
 	allocSize int, allocAlignment uint,
 	upperAddress bool,
-	allocType allocation.SuballocationType,
-	strategy allocation.AllocationCreateFlags,
-	allocRequest *allocation.AllocationRequest,
+	allocType SuballocationType,
+	strategy memory.AllocationCreateFlags,
+	allocRequest *request.AllocationRequest,
 ) (bool, error) {
 	if allocSize < 1 {
 		return false, errors.Newf("Invalid allocSize: %d", allocSize)
@@ -399,7 +398,7 @@ func (m *tlsfBlockMetadata) PopulateAllocationRequest(
 	var nextListBlock, prevListBlock *tlsfBlock
 
 	// Check blocks according to the requested strategy
-	if strategy&allocation.AllocationCreateStrategyMinTime != 0 {
+	if strategy&memory.AllocationCreateStrategyMinTime != 0 {
 		// Check for larger block first
 		nextListBlock, nextListIndex, err = m.findFreeBlock(sizeForNextList, nextListIndex)
 		if err != nil {
@@ -443,7 +442,7 @@ func (m *tlsfBlockMetadata) PopulateAllocationRequest(
 
 			prevListBlock = prevListBlock.nextFree
 		}
-	} else if strategy&allocation.AllocationCreateStrategyMinMemory != 0 {
+	} else if strategy&memory.AllocationCreateStrategyMinMemory != 0 {
 		// Check best fit bucket
 		prevListBlock, prevListIndex, err = m.findFreeBlock(allocSize, prevListIndex)
 		if err != nil {
@@ -479,7 +478,7 @@ func (m *tlsfBlockMetadata) PopulateAllocationRequest(
 
 			nextListBlock = nextListBlock.nextFree
 		}
-	} else if strategy&allocation.AllocationCreateStrategyMinOffset != 0 {
+	} else if strategy&memory.AllocationCreateStrategyMinOffset != 0 {
 		// Perform search from the start
 		blockList := make([]*tlsfBlock, m.blocksFreeCount)
 		i := m.blocksFreeCount
@@ -566,8 +565,8 @@ func (m *tlsfBlockMetadata) checkBlock(
 	listIndex int,
 	allocSize int,
 	allocAlignment uint,
-	allocType allocation.SuballocationType,
-	allocRequest *allocation.AllocationRequest,
+	allocType SuballocationType,
+	allocRequest *request.AllocationRequest,
 ) (bool, error) {
 	if !block.IsFree() {
 		return false, errors.Newf("block at offset %d is already taken", block.offset)
@@ -590,7 +589,7 @@ func (m *tlsfBlockMetadata) checkBlock(
 	}
 
 	// Alloc will work
-	allocRequest.Type = allocation.AllocationRequestTLSF
+	allocRequest.Type = request.AllocationRequestTLSF
 	allocRequest.BlockAllocationHandle = block.blockHandle
 	allocRequest.Size = allocSize
 	allocRequest.CustomData = allocType
@@ -642,7 +641,7 @@ func (m *tlsfBlockMetadata) findFreeBlock(size int, listIndex int) (*tlsfBlock, 
 	return m.freeList[listIndex], listIndex, nil
 }
 
-func (m *tlsfBlockMetadata) PrintDetailedMap(json *jwriter.ObjectState) error {
+func (m *tlsfBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) error {
 	blockCount := m.allocCount + m.blocksFreeCount
 	blockList := make([]*tlsfBlock, blockCount)
 
@@ -662,22 +661,6 @@ func (m *tlsfBlockMetadata) PrintDetailedMap(json *jwriter.ObjectState) error {
 
 	m.printDetailedMap_Header(json, stats.BlockBytes-stats.AllocationBytes, stats.AllocationCount, stats.UnusedRangeCount)
 
-	arrayState := json.Name("Suballocations").Array()
-	defer arrayState.End()
-
-	for ; i < blockCount; i++ {
-		block := blockList[i]
-		if block.IsFree() {
-			m.printDetailedMap_UnusedRange(&arrayState, block.offset, block.size)
-		} else {
-			m.printDetailedMap_Allocation(&arrayState, block.offset, block.size, block.userData)
-		}
-	}
-
-	if m.nullBlock.size > 0 {
-		m.printDetailedMap_UnusedRange(&arrayState, m.nullBlock.offset, m.nullBlock.size)
-	}
-
 	return nil
 }
 
@@ -693,14 +676,14 @@ func (m *tlsfBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.Vk
 	return core1_0.VKSuccess, nil
 }
 
-func (m *tlsfBlockMetadata) Alloc(request *allocation.AllocationRequest, suballocType allocation.SuballocationType, userData any) error {
-	if request.Type != allocation.AllocationRequestTLSF {
+func (m *tlsfBlockMetadata) Alloc(req *request.AllocationRequest, suballocType SuballocationType, userData any) error {
+	if req.Type != request.AllocationRequestTLSF {
 		return errors.New("allocation request was received by an incompatible metadata")
 	}
 
 	// Get block and pop it from the free list
-	currentBlock, err := m.getBlock(request.BlockAllocationHandle)
-	offset := int(request.AlgorithmData)
+	currentBlock, err := m.getBlock(req.BlockAllocationHandle)
+	offset := int(req.AlgorithmData)
 
 	if err != nil {
 		return err
@@ -767,7 +750,7 @@ func (m *tlsfBlockMetadata) Alloc(request *allocation.AllocationRequest, suballo
 		currentBlock.offset += missingAlignment
 	}
 
-	size := request.Size + debugMargin
+	size := req.Size + debugMargin
 	if currentBlock.size == size {
 		if currentBlock == m.nullBlock {
 			// Setup a new null block
@@ -829,7 +812,7 @@ func (m *tlsfBlockMetadata) Alloc(request *allocation.AllocationRequest, suballo
 	}
 
 	if !m.isVirtual {
-		allocType, isAllocType := request.CustomData.(allocation.SuballocationType)
+		allocType, isAllocType := req.CustomData.(SuballocationType)
 		if !isAllocType {
 			return errors.New("allocation request had invalid customdata for this metadata")
 		}
@@ -840,7 +823,7 @@ func (m *tlsfBlockMetadata) Alloc(request *allocation.AllocationRequest, suballo
 	return nil
 }
 
-func (m *tlsfBlockMetadata) Free(allocHandle allocation.BlockAllocationHandle) error {
+func (m *tlsfBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 	block, err := m.getBlock(allocHandle)
 	if err != nil {
 		return err
@@ -1004,9 +987,15 @@ func (m *tlsfBlockMetadata) mergeBlock(block *tlsfBlock, prev *tlsfBlock) error 
 	return nil
 }
 
-func (m *tlsfBlockMetadata) AllocationListBegin() (allocation.BlockAllocationHandle, error) {
+func (m *tlsfBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool)) {
+	for block := m.nullBlock; block != nil; block = block.prevPhysical {
+		handleBlock(block.blockHandle, block.offset, block.size, block.userData, block.IsFree())
+	}
+}
+
+func (m *tlsfBlockMetadata) AllocationListBegin() (BlockAllocationHandle, error) {
 	if m.allocCount == 0 {
-		return allocation.NoAllocation, nil
+		return NoAllocation, nil
 	}
 
 	for block := m.nullBlock.prevPhysical; block != nil; block = block.prevPhysical {
@@ -1015,16 +1004,16 @@ func (m *tlsfBlockMetadata) AllocationListBegin() (allocation.BlockAllocationHan
 		}
 	}
 
-	return allocation.NoAllocation, errors.New("the metadata has an allocation but none could be found in the physical blocks")
+	return NoAllocation, errors.New("the metadata has an allocation but none could be found in the physical blocks")
 }
 
-func (m *tlsfBlockMetadata) FindNextAllocation(alloc allocation.BlockAllocationHandle) (allocation.BlockAllocationHandle, error) {
+func (m *tlsfBlockMetadata) FindNextAllocation(alloc BlockAllocationHandle) (BlockAllocationHandle, error) {
 	startBlock, err := m.getBlock(alloc)
 	if err != nil {
-		return allocation.NoAllocation, err
+		return NoAllocation, err
 	}
 	if startBlock.IsFree() {
-		return allocation.NoAllocation, errors.New("provided block cannot be free")
+		return NoAllocation, errors.New("provided block cannot be free")
 	}
 
 	for block := startBlock.prevPhysical; block != nil; block = block.prevPhysical {
@@ -1033,10 +1022,10 @@ func (m *tlsfBlockMetadata) FindNextAllocation(alloc allocation.BlockAllocationH
 		}
 	}
 
-	return allocation.NoAllocation, nil
+	return NoAllocation, nil
 }
 
-func (m *tlsfBlockMetadata) FindNextFreeRegionSize(alloc allocation.BlockAllocationHandle) (int, error) {
+func (m *tlsfBlockMetadata) FindNextFreeRegionSize(alloc BlockAllocationHandle) (int, error) {
 	block, err := m.getBlock(alloc)
 	if err != nil {
 		return 0, err
@@ -1073,15 +1062,15 @@ func (m *tlsfBlockMetadata) Clear() {
 	m.granularityHandler.Clear()
 }
 
-func (m *tlsfBlockMetadata) DebugLogAllAllocations(logger *log.Logger) {
+func (m *tlsfBlockMetadata) DebugLogAllAllocations(logger *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any)) {
 	for block := m.nullBlock.prevPhysical; block != nil; block = block.prevPhysical {
 		if !block.IsFree() {
-			m.debugLogAllocation(logger, block.offset, block.size, block.userData)
+			logFunc(logger, block.offset, block.size, block.userData)
 		}
 	}
 }
 
-func (m *tlsfBlockMetadata) AllocationOffset(allocHandle allocation.BlockAllocationHandle) (int, error) {
+func (m *tlsfBlockMetadata) AllocationOffset(allocHandle BlockAllocationHandle) (int, error) {
 	block, err := m.getBlock(allocHandle)
 	if err != nil {
 		return 0, err
@@ -1090,24 +1079,7 @@ func (m *tlsfBlockMetadata) AllocationOffset(allocHandle allocation.BlockAllocat
 	return block.offset, nil
 }
 
-func (m *tlsfBlockMetadata) PopulateAllocationInfo(allocHandle allocation.BlockAllocationHandle, info *allocation.VirtualAllocationInfo) error {
-	block, err := m.getBlock(allocHandle)
-	if err != nil {
-		return err
-	}
-
-	if block.IsFree() {
-		return errors.New("allocation info cannot be retrieved for a free block")
-	}
-
-	info.Offset = block.offset
-	info.Size = block.size
-	info.UserData = block.userData
-
-	return nil
-}
-
-func (m *tlsfBlockMetadata) AllocationUserData(allocHandle allocation.BlockAllocationHandle) (any, error) {
+func (m *tlsfBlockMetadata) AllocationUserData(allocHandle BlockAllocationHandle) (any, error) {
 	block, err := m.getBlock(allocHandle)
 	if err != nil {
 		return nil, err
@@ -1120,7 +1092,7 @@ func (m *tlsfBlockMetadata) AllocationUserData(allocHandle allocation.BlockAlloc
 	return block.userData, nil
 }
 
-func (m *tlsfBlockMetadata) SetAllocationUserData(allocHandle allocation.BlockAllocationHandle, userData any) error {
+func (m *tlsfBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationHandle, userData any) error {
 	block, err := m.getBlock(allocHandle)
 	if err != nil {
 		return err

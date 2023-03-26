@@ -1,6 +1,4 @@
-package allocation
-
-import "math"
+package metadata
 
 type AllocationRequestType uint32
 
@@ -24,16 +22,10 @@ func (t AllocationRequestType) String() string {
 	return allocationRequestMapping[t]
 }
 
-type BlockAllocationHandle uint64
-
-const (
-	NoAllocation BlockAllocationHandle = math.MaxUint64
-)
-
 type AllocationRequest struct {
 	BlockAllocationHandle BlockAllocationHandle
 	Size                  int
-	Item                  *Suballocation
+	Item                  Suballocation
 	CustomData            any
 	AlgorithmData         uint64
 	Type                  AllocationRequestType

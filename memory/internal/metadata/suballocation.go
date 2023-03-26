@@ -1,4 +1,12 @@
-package allocation
+package metadata
+
+import "math"
+
+type BlockAllocationHandle uint64
+
+const (
+	NoAllocation BlockAllocationHandle = math.MaxUint64
+)
 
 type SuballocationType uint32
 
@@ -27,4 +35,11 @@ func (s SuballocationType) String() string {
 	}
 
 	return str
+}
+
+type Suballocation struct {
+	Offset   int
+	Size     int
+	UserData any
+	Type     SuballocationType
 }

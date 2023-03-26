@@ -1,4 +1,4 @@
-package allocator
+package vulkan
 
 import (
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -18,7 +18,7 @@ type ExtensionData struct {
 	DedicatedAllocations  bool
 	ExternalMemory        bool
 	GetMemoryRequirements khr_get_memory_requirements2_shim.Shim
-	BindBufferMemory      khr_bind_memory2_shim.Shim
+	BindMemory2           khr_bind_memory2_shim.Shim
 	BufferDeviceAddress   khr_buffer_device_address_shim.Shim
 	// TODO
 	//useMemoryBudget bool
@@ -37,7 +37,7 @@ func NewExtensionData(device core1_0.Device) *ExtensionData {
 		// khr_dedicated_allocation, and khr_external_memory
 		data.DedicatedAllocations = true
 		data.ExternalMemory = true
-		data.BindBufferMemory = device11
+		data.BindMemory2 = device11
 		data.GetMemoryRequirements = device11
 	}
 
@@ -48,9 +48,9 @@ func NewExtensionData(device core1_0.Device) *ExtensionData {
 	}
 
 	// khr_bind_memory2 if core 1.1 is not active
-	if data.BindBufferMemory == nil && device.IsDeviceExtensionActive(khr_bind_memory2.ExtensionName) {
+	if data.BindMemory2 == nil && device.IsDeviceExtensionActive(khr_bind_memory2.ExtensionName) {
 		extension := khr_bind_memory2.CreateExtensionFromDevice(device)
-		data.BindBufferMemory = khr_bind_memory2_shim.NewShim(device, extension)
+		data.BindMemory2 = khr_bind_memory2_shim.NewShim(device, extension)
 	}
 
 	// khr_get_memory_requirements2 if core 1.1 is not active

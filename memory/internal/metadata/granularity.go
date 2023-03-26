@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"github.com/cockroachdb/errors"
-	"github.com/vkngwrapper/arsenal/memory/allocation"
 	"github.com/vkngwrapper/arsenal/memory/internal/utils"
 	"math/bits"
 )
@@ -12,26 +11,26 @@ const (
 )
 
 func IsBufferImageGranularityConflict(
-	subAllocType1 allocation.SuballocationType,
-	subAllocType2 allocation.SuballocationType,
+	subAllocType1 SuballocationType,
+	subAllocType2 SuballocationType,
 ) bool {
 	if subAllocType1 > subAllocType2 {
 		subAllocType1, subAllocType2 = subAllocType2, subAllocType1
 	}
 
 	switch subAllocType1 {
-	case allocation.SuballocationFree:
+	case SuballocationFree:
 		return false
-	case allocation.SuballocationUnknown:
+	case SuballocationUnknown:
 		return true
-	case allocation.SuballocationBuffer:
-		return subAllocType2 == allocation.SuballocationImageUnknown || subAllocType2 == allocation.SuballocationImageOptimal
-	case allocation.SuballocationImageUnknown:
-		return subAllocType2 == allocation.SuballocationImageUnknown || subAllocType2 == allocation.SuballocationImageLinear ||
-			subAllocType2 == allocation.SuballocationImageOptimal
-	case allocation.SuballocationImageLinear:
-		return subAllocType2 == allocation.SuballocationImageOptimal
-	case allocation.SuballocationImageOptimal:
+	case SuballocationBuffer:
+		return subAllocType2 == SuballocationImageUnknown || subAllocType2 == SuballocationImageOptimal
+	case SuballocationImageUnknown:
+		return subAllocType2 == SuballocationImageUnknown || subAllocType2 == SuballocationImageLinear ||
+			subAllocType2 == SuballocationImageOptimal
+	case SuballocationImageLinear:
+		return subAllocType2 == SuballocationImageOptimal
+	case SuballocationImageOptimal:
 		return false
 	}
 
@@ -39,7 +38,7 @@ func IsBufferImageGranularityConflict(
 }
 
 type regionInfo struct {
-	allocType  allocation.SuballocationType
+	allocType  SuballocationType
 	allocCount uint16
 }
 
@@ -64,12 +63,12 @@ func (g *BlockBufferImageGranularity) Destroy() {
 	}
 }
 
-func (g *BlockBufferImageGranularity) RoundupAllocRequest(allocType allocation.SuballocationType, allocSize int, allocAlignment uint) (int, uint, error) {
+func (g *BlockBufferImageGranularity) RoundupAllocRequest(allocType SuballocationType, allocSize int, allocAlignment uint) (int, uint, error) {
 	if g.bufferImageGranularity > 1 &&
 		g.bufferImageGranularity <= MaxLowBufferImageGranularity &&
-		(allocType == allocation.SuballocationUnknown ||
-			allocType == allocation.SuballocationImageUnknown ||
-			allocType == allocation.SuballocationImageOptimal) {
+		(allocType == SuballocationUnknown ||
+			allocType == SuballocationImageUnknown ||
+			allocType == SuballocationImageOptimal) {
 
 		if allocAlignment < g.bufferImageGranularity {
 			allocAlignment = g.bufferImageGranularity
@@ -87,7 +86,7 @@ func (g *BlockBufferImageGranularity) RoundupAllocRequest(allocType allocation.S
 
 func (g *BlockBufferImageGranularity) CheckConflictAndAlignUp(
 	allocOffset, allocSize, blockOffset, blockSize int,
-	allocType allocation.SuballocationType,
+	allocType SuballocationType,
 ) (int, bool, error) {
 	if !g.IsEnabled() {
 		return allocOffset, false, nil
@@ -117,7 +116,7 @@ func (g *BlockBufferImageGranularity) CheckConflictAndAlignUp(
 	return allocOffset, false, nil
 }
 
-func (g *BlockBufferImageGranularity) AllocPages(allocType allocation.SuballocationType, offset, size int) {
+func (g *BlockBufferImageGranularity) AllocPages(allocType SuballocationType, offset, size int) {
 	if !g.IsEnabled() {
 		return
 	}
@@ -139,14 +138,14 @@ func (g *BlockBufferImageGranularity) FreePages(offset, size int) {
 	startPage := g.getStartPage(offset)
 	g.regionInfo[startPage].allocCount--
 	if g.regionInfo[startPage].allocCount == 0 {
-		g.regionInfo[startPage].allocType = allocation.SuballocationFree
+		g.regionInfo[startPage].allocType = SuballocationFree
 	}
 
 	endPage := g.getEndPage(offset, size)
 	if startPage != endPage {
 		g.regionInfo[endPage].allocCount--
 		if g.regionInfo[endPage].allocCount == 0 {
-			g.regionInfo[endPage].allocType = allocation.SuballocationFree
+			g.regionInfo[endPage].allocType = SuballocationFree
 		}
 	}
 }
@@ -204,8 +203,8 @@ func (g *BlockBufferImageGranularity) finishValidation(ctx *validationContext) e
 	return nil
 }
 
-func (g *BlockBufferImageGranularity) allocPage(page *regionInfo, allocType allocation.SuballocationType) {
-	if page.allocCount == 0 || (page.allocCount > 0 && page.allocType == allocation.SuballocationFree) {
+func (g *BlockBufferImageGranularity) allocPage(page *regionInfo, allocType SuballocationType) {
+	if page.allocCount == 0 || (page.allocCount > 0 && page.allocType == SuballocationFree) {
 		page.allocType = allocType
 	}
 

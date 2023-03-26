@@ -1,10 +1,64 @@
-package allocation
+package memory
 
 import (
-	"github.com/vkngwrapper/arsenal/memory"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
 )
+
+type MemoryUsage uint32
+
+const (
+	// MemoryUsageUnknown indicates no intended memory usage was specified
+	MemoryUsageUnknown MemoryUsage = iota
+	// MemoryUsageGPULazilyAllocated indicates lazily-allocated GPU memory. Exists mostly
+	// on mobile platforms. Using it on desktop PC or other GPUs with no such memory type present
+	// will fail the allocation.
+	//
+	// Usage: Memory for transient attachment images (color attachments, depth attachments, etc.) created
+	// with core1_0.ImageUsageTransientAttachment
+	//
+	// Allocations with this usage are always created as dedicated - it implies AllocationCreateDedicatedMemory
+	MemoryUsageGPULazilyAllocated
+	// MemoryUsageAuto selects the best memory type automatically. This flag is recommended for most
+	// common use cases.
+	//
+	// When using this flag, if you want to map the allocation, you must pass one of the flags
+	// AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom in AllocationCreateInfo.Flags
+	//
+	// It can be used only with functions indicate a Buffer or Image and not with generic memory allocation
+	// functions.
+	MemoryUsageAuto
+	// MemoryUsageAutoPreferDevice selects the best memory type automatically with preference for GPU (device)
+	// memory. When using this flag, if you want to map the allocation, you must pass one of the flags
+	// AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom in AllocationCreateInfo.Flags
+	//
+	// It can be used only with functions indicate a Buffer or Image and not with generic memory allocation
+	// functions.
+	MemoryUsageAutoPreferDevice
+	// MemoryUsageAutoPreferHost selects the best memory type automatically with preference for CPU (host)
+	// memory. When using this flag, if you want to map the allocation, you must pass one of the flags
+	// AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom in AllocationCreateInfo.Flags
+	//
+	// It can be used only with functions indicate a Buffer or Image and not with generic memory allocation
+	// functions.
+	MemoryUsageAutoPreferHost
+)
+
+var memoryUsageMapping = map[MemoryUsage]string{
+	MemoryUsageUnknown:            "MemoryUsageUnknown",
+	MemoryUsageGPULazilyAllocated: "MemoryUsageGPULazilyAllocated",
+	MemoryUsageAuto:               "MemoryUsageAuto",
+	MemoryUsageAutoPreferDevice:   "MemoryUsageAutoPreferDevice",
+	MemoryUsageAutoPreferHost:     "MemoryUsageAutoPreferHost",
+}
+
+func (u MemoryUsage) String() string {
+	str, ok := memoryUsageMapping[u]
+	if !ok {
+		return "unknown"
+	}
+	return str
+}
 
 type AllocationCreateFlags int32
 
@@ -29,7 +83,7 @@ const (
 	// AllocationCreateMapped instructs the allocator to use memory that will be persistently mapped
 	// and retrieve a pointer to it
 	//
-	// The pointer will be available via Allocation.MappedData()
+	// The pointer will be available via Allocation.mappedData()
 	//
 	// It is valid to use this flag for an allocation made from a memory type that is not HOST_VISIBLE.
 	// This flag is then ignored and the memory is not mapped. This is useful if you need an allocation
@@ -103,61 +157,6 @@ const (
 		AllocationCreateStrategyMinOffset
 )
 
-type MemoryUsage uint32
-
-const (
-	// MemoryUsageUnknown indicates no intended memory usage was specified
-	MemoryUsageUnknown MemoryUsage = iota
-	// MemoryUsageGPULazilyAllocated indicates lazily-allocated GPU memory. Exists mostly
-	// on mobile platforms. Using it on desktop PC or other GPUs with no such memory type present
-	// will fail the allocation.
-	//
-	// Usage: Memory for transient attachment images (color attachments, depth attachments, etc.) created
-	// with core1_0.ImageUsageTransientAttachment
-	//
-	// Allocations with this usage are always created as dedicated - it implies AllocationCreateDedicatedMemory
-	MemoryUsageGPULazilyAllocated
-	// MemoryUsageAuto selects the best memory type automatically. This flag is recommended for most
-	// common use cases.
-	//
-	// When using this flag, if you want to map the allocation, you must pass one of the flags
-	// AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom in AllocationCreateInfo.Flags
-	//
-	// It can be used only with functions indicate a Buffer or Image and not with generic memory allocation
-	// functions.
-	MemoryUsageAuto
-	// MemoryUsageAutoPreferDevice selects the best memory type automatically with preference for GPU (device)
-	// memory. When using this flag, if you want to map the allocation, you must pass one of the flags
-	// AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom in AllocationCreateInfo.Flags
-	//
-	// It can be used only with functions indicate a Buffer or Image and not with generic memory allocation
-	// functions.
-	MemoryUsageAutoPreferDevice
-	// MemoryUsageAutoPreferHost selects the best memory type automatically with preference for CPU (host)
-	// memory. When using this flag, if you want to map the allocation, you must pass one of the flags
-	// AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom in AllocationCreateInfo.Flags
-	//
-	// It can be used only with functions indicate a Buffer or Image and not with generic memory allocation
-	// functions.
-	MemoryUsageAutoPreferHost
-)
-
-var memoryUsageMapping = map[MemoryUsage]string{
-	MemoryUsageUnknown:            "MemoryUsageUnknown",
-	MemoryUsageGPULazilyAllocated: "MemoryUsageGPULazilyAllocated",
-	MemoryUsageAuto:               "MemoryUsageAuto",
-	MemoryUsageAutoPreferDevice:   "MemoryUsageAutoPreferDevice",
-	MemoryUsageAutoPreferHost:     "MemoryUsageAutoPreferHost",
-}
-
-func (u MemoryUsage) String() string {
-	str, ok := memoryUsageMapping[u]
-	if !ok {
-		return "unknown"
-	}
-	return str
-}
-
 func init() {
 	AllocationCreateDedicatedMemory.Register("AllocationCreateDedicatedMemory")
 	AllocationCreateNeverAllocate.Register("AllocationCreateNeverAllocate")
@@ -182,7 +181,7 @@ type AllocationCreateInfo struct {
 	PreferredFlags core1_0.MemoryPropertyFlags
 
 	MemoryTypeBits uint32
-	Pool           memory.Pool
+	Pool           Pool
 
 	UserData interface{}
 	Priority float32
