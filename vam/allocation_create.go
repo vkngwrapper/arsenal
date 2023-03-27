@@ -68,7 +68,7 @@ type AllocationCreateInfo struct {
 	PreferredFlags core1_0.MemoryPropertyFlags
 
 	MemoryTypeBits uint32
-	Pool           Pool
+	Pool           *Pool
 
 	UserData interface{}
 	Priority float32

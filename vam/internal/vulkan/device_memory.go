@@ -17,6 +17,11 @@ type Budget struct {
 	Budget     int
 }
 
+type MemoryCallbacks interface {
+	Allocate(memoryType int, memory core1_0.DeviceMemory, size int)
+	Free(memoryType int, memory core1_0.DeviceMemory, size int)
+}
+
 type DeviceMemoryProperties struct {
 	// Number of real allocations that have been made from device memory
 	blockCount [common.MaxMemoryHeaps]int32
@@ -34,7 +39,7 @@ type DeviceMemoryProperties struct {
 	// Whether the SynchronizedMemory objects created from this object should use a mutex to control access
 	useMutex            bool
 	allocationCallbacks *driver.AllocationCallbacks
-	memoryCallbacks     *MemoryCallbacks
+	memoryCallbacks     MemoryCallbacks
 	memoryCount         uint32
 	heapLimits          []int
 
@@ -48,7 +53,7 @@ type DeviceMemoryProperties struct {
 func NewDeviceMemoryProperties(
 	useMutex bool,
 	allocationCallbacks *driver.AllocationCallbacks,
-	memoryCallbacks *MemoryCallbacks,
+	memoryCallbacks MemoryCallbacks,
 	device core1_0.Device,
 	physicalDevice core1_0.PhysicalDevice,
 	heapSizeLimits []int,

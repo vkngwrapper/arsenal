@@ -1,4 +1,4 @@
-package vulkan
+package vam
 
 import (
 	"github.com/cockroachdb/errors"

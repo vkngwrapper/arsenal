@@ -1,4 +1,4 @@
-package vulkan
+package vam
 
 import (
 	"fmt"
@@ -6,7 +6,6 @@ import (
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
-	"github.com/vkngwrapper/arsenal/vam"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
@@ -33,7 +32,7 @@ type memoryBlockList struct {
 	bufferImageGranularity int
 
 	explicitBlockSize      bool
-	algorithm              vam.PoolCreateFlags
+	algorithm              PoolCreateFlags
 	priority               float32
 	minAllocationAlignment uint
 
@@ -48,7 +47,7 @@ type memoryBlockList struct {
 func (l *memoryBlockList) MemoryTypeIndex() int                { return l.memoryTypeIndex }
 func (l *memoryBlockList) PreferredBlockSize() int             { return l.preferredBlockSize }
 func (l *memoryBlockList) BufferImageGranularity() int         { return l.bufferImageGranularity }
-func (l *memoryBlockList) Algorithm() vam.PoolCreateFlags      { return l.algorithm }
+func (l *memoryBlockList) Algorithm() PoolCreateFlags          { return l.algorithm }
 func (l *memoryBlockList) HasExplicitBlockSize() bool          { return l.explicitBlockSize }
 func (l *memoryBlockList) Priority() float32                   { return l.priority }
 func (l *memoryBlockList) AllocateNextPointer() unsafe.Pointer { return l.memoryAllocateNext }
@@ -62,7 +61,7 @@ func (l *memoryBlockList) Init(
 	minBlockCount, maxBlockCount int,
 	bufferImageGranularity int,
 	explicitBlockSize bool,
-	algorithm vam.PoolCreateFlags,
+	algorithm PoolCreateFlags,
 	priority float32,
 	minAllocationAlignment uint,
 	extensionData *vulkan.ExtensionData,
@@ -209,11 +208,11 @@ func (l *memoryBlockList) Remove(block *deviceMemoryBlock) error {
 func (l *memoryBlockList) IsCorruptionDetectionEnabled() bool {
 	requiredMemFlags := core1_0.MemoryPropertyHostVisible | core1_0.MemoryPropertyHostCoherent
 	return memutils.DebugMargin > 0 &&
-		(l.algorithm == 0 || l.algorithm == vam.PoolCreateLinearAlgorithm) &&
+		(l.algorithm == 0 || l.algorithm == PoolCreateLinearAlgorithm) &&
 		l.deviceMemory.MemoryTypeProperties(l.memoryTypeIndex).PropertyFlags&requiredMemFlags == requiredMemFlags
 }
 
-func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *vam.AllocationCreateInfo, suballocType metadata.SuballocationType, allocations []Allocation) (res common.VkResult, err error) {
+func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *AllocationCreateInfo, suballocType metadata.SuballocationType, allocations []Allocation) (res common.VkResult, err error) {
 	if l.minAllocationAlignment > alignment {
 		alignment = l.minAllocationAlignment
 	}
@@ -248,7 +247,7 @@ func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *vam.All
 	return res, err
 }
 
-func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *vam.AllocationCreateInfo, suballocType metadata.SuballocationType, allocs []Allocation) (res common.VkResult, err error) {
+func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *AllocationCreateInfo, suballocType metadata.SuballocationType, allocs []Allocation) (res common.VkResult, err error) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 
@@ -275,7 +274,7 @@ func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *vam.A
 	return core1_0.VKSuccess, nil
 }
 
-func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *vam.AllocationCreateInfo, suballocationType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
+func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *AllocationCreateInfo, suballocationType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
 	isUpperAddress := createInfo.Flags&memutils.AllocationCreateUpperAddress != 0
 
 	var res common.VkResult
@@ -301,7 +300,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *vam.Al
 	strategy := createInfo.Flags & memutils.AllocationCreateStrategyMask
 
 	// Upper address can only be used with linear allocator and within a single memory blcok
-	if isUpperAddress && (l.algorithm != vam.PoolCreateLinearAlgorithm || l.maxBlockCount > 1) {
+	if isUpperAddress && (l.algorithm != PoolCreateLinearAlgorithm || l.maxBlockCount > 1) {
 		return core1_0.VKErrorFeatureNotPresent, core1_0.VKErrorFeatureNotPresent.ToError()
 	}
 
@@ -311,7 +310,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *vam.Al
 	}
 
 	// 1. Search existing allocations & try to do an allocation
-	if l.algorithm == vam.PoolCreateLinearAlgorithm {
+	if l.algorithm == PoolCreateLinearAlgorithm {
 		// Only use the last block in linear
 		if len(l.blocks) != 0 {
 			currentBlock := l.blocks[len(l.blocks)-1]
@@ -546,7 +545,7 @@ func (l *memoryBlockList) hasEmptyBlock() bool {
 }
 
 func (l *memoryBlockList) incrementallySortBlocks() {
-	if !l.incrementalSort || l.algorithm == vam.PoolCreateLinearAlgorithm {
+	if !l.incrementalSort || l.algorithm == PoolCreateLinearAlgorithm {
 		return
 	}
 

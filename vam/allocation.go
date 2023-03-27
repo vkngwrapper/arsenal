@@ -1,4 +1,4 @@
-package vulkan
+package vam
 
 import (
 	"fmt"
@@ -6,7 +6,6 @@ import (
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
-	"github.com/vkngwrapper/arsenal/vam"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -53,7 +52,7 @@ type BlockData struct {
 }
 
 type DedicatedData struct {
-	parentPool vam.Pool
+	parentPool *Pool
 	nextAlloc  *Allocation
 	prevAlloc  *Allocation
 }
@@ -132,7 +131,7 @@ func (a *Allocation) initBlockAllocation(
 }
 
 func (a *Allocation) initDedicatedAllocation(
-	parentPool vam.Pool,
+	parentPool *Pool,
 	memoryTypeIndex int,
 	memory *vulkan.SynchronizedMemory,
 	suballocationType metadata.SuballocationType,

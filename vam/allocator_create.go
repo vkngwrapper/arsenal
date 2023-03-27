@@ -1,9 +1,8 @@
-package vulkan
+package vam
 
 import (
 	"github.com/cockroachdb/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
-	"github.com/vkngwrapper/arsenal/vam"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -59,7 +58,7 @@ type CreateOptions struct {
 	// MemoryCallbackOptions is an optional set of callbacks that will be executed when Vulkan memory
 	// is allocated from this allocator. It can be helpful in cases when the consumer requires allocator-
 	// level info about allocated memory
-	MemoryCallbackOptions *vam.MemoryCallbackOptions
+	MemoryCallbackOptions *MemoryCallbackOptions
 
 	// HeapSizeLimits can be left empty. If it is provided, though, it must be a slice
 	// with a number of entries corresponding to the number of heaps in the PhysicalDevice
@@ -79,7 +78,7 @@ type CreateOptions struct {
 	ExternalMemoryHandleTypes []khr_external_memory_capabilities.ExternalMemoryHandleTypeFlags
 }
 
-// New creates a new VulkanAllocator
+// New creates a new Allocator
 //
 // instance - The instance that owns the provided Device
 //
@@ -88,10 +87,10 @@ type CreateOptions struct {
 // device - The Device that memory will be allocated into
 //
 // options - Optional parameters: it is valid to leave all the fields blank
-func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.PhysicalDevice, device core1_0.Device, options CreateOptions) (*VulkanAllocator, error) {
+func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.PhysicalDevice, device core1_0.Device, options CreateOptions) (*Allocator, error) {
 	useMutex := options.Flags&AllocatorCreateExternallySynchronized == 0
 
-	allocator := &VulkanAllocator{
+	allocator := &Allocator{
 		useMutex:       useMutex,
 		logger:         logger,
 		instance:       instance,
@@ -124,7 +123,7 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 	allocator.deviceMemory, err = vulkan.NewDeviceMemoryProperties(
 		useMutex,
 		options.VulkanCallbacks,
-		&vulkan.MemoryCallbacks{
+		&memoryCallbacks{
 			Callbacks: options.MemoryCallbackOptions,
 			Allocator: allocator,
 		},
@@ -174,7 +173,7 @@ const (
 	smallHeapMaxSize int = 1024 * 1024 * 1024 // 1 GB
 )
 
-func (a *VulkanAllocator) calculatePreferredBlockSize(memTypeIndex int) (int, error) {
+func (a *Allocator) calculatePreferredBlockSize(memTypeIndex int) (int, error) {
 	heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memTypeIndex)
 
 	heapSize := a.deviceMemory.MemoryHeapProperties(heapIndex).Size
@@ -186,7 +185,7 @@ func (a *VulkanAllocator) calculatePreferredBlockSize(memTypeIndex int) (int, er
 	return memutils.AlignUp(rawSize, 32), nil
 }
 
-func (a *VulkanAllocator) calculateGlobalMemoryTypeBits() uint32 {
+func (a *Allocator) calculateGlobalMemoryTypeBits() uint32 {
 	var typeBits uint32
 
 	memTypeCount := a.deviceMemory.MemoryTypeCount()
@@ -198,7 +197,7 @@ func (a *VulkanAllocator) calculateGlobalMemoryTypeBits() uint32 {
 	return typeBits
 }
 
-func (a *VulkanAllocator) calculateBufferImageGranularity() int {
+func (a *Allocator) calculateBufferImageGranularity() int {
 	granularity := a.deviceMemory.DeviceProperties().Limits.BufferImageGranularity
 
 	if granularity < 1 {
