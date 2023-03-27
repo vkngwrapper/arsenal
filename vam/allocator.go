@@ -14,7 +14,6 @@ import (
 	"golang.org/x/exp/slog"
 	"math"
 	"math/bits"
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -34,14 +33,13 @@ type Allocator struct {
 	nextPoolId                       int
 
 	deviceMemory         *vulkan.DeviceMemoryProperties
-	memoryBlockLists     [common.MaxMemoryTypes]memoryBlockList
-	dedicatedAllocations [common.MaxMemoryTypes]dedicatedAllocationList
+	memoryBlockLists     [common.MaxMemoryTypes]*memoryBlockList
+	dedicatedAllocations [common.MaxMemoryTypes]*dedicatedAllocationList
 }
 
 func (a *Allocator) calcAllocationParams(
 	o *AllocationCreateInfo,
 	requiresDedicatedAllocation bool,
-	prefersDedicatedAllocation bool,
 ) (common.VkResult, error) {
 	hostAccessFlags := o.Flags & (memutils.AllocationCreateHostAccessSequentialWrite | memutils.AllocationCreateHostAccessRandom)
 	if hostAccessFlags == (memutils.AllocationCreateHostAccessSequentialWrite | memutils.AllocationCreateHostAccessRandom) {
@@ -66,7 +64,11 @@ func (a *Allocator) calcAllocationParams(
 	}
 
 	if o.Pool != nil {
-		// TODO: Pool
+		if o.Pool.blockList.HasExplicitBlockSize() && o.Flags&memutils.AllocationCreateDedicatedMemory != 0 {
+			return core1_0.VKErrorFeatureNotPresent, errors.New("specified memutils.AllocationCreateDedicatedMemory with a pool that does not support it")
+		}
+
+		o.Priority = o.Pool.blockList.priority
 	}
 
 	if o.Flags&memutils.AllocationCreateDedicatedMemory != 0 && o.Flags&memutils.AllocationCreateNeverAllocate != 0 {
@@ -82,15 +84,11 @@ func (a *Allocator) calcAllocationParams(
 	return core1_0.VKSuccess, nil
 }
 
-func (a *Allocator) isIntegratedGPU() bool {
-	return a.deviceMemory.DeviceProperties().DriverType == core1_0.PhysicalDeviceTypeIntegratedGPU
-}
-
 func (a *Allocator) findMemoryPreferences(
 	o AllocationCreateInfo,
 	bufferOrImageUsage *uint32,
 ) (requiredFlags, preferredFlags, notPreferredFlags core1_0.MemoryPropertyFlags, err error) {
-	isIntegratedGPU := a.isIntegratedGPU()
+	isIntegratedGPU := a.deviceMemory.IsIntegratedGPU()
 	requiredFlags = o.RequiredFlags
 	preferredFlags = o.PreferredFlags
 	notPreferredFlags = 0
@@ -301,8 +299,8 @@ func (a *Allocator) allocateDedicatedMemory(
 	userData any,
 	priority float32,
 	dedicatedBuffer core1_0.Buffer,
-	dedicatedBufferUsage core1_0.BufferUsageFlags,
 	dedicatedImage core1_0.Image,
+	dedicatedBufferOrImageUsage *uint32,
 	allocations []Allocation,
 	options common.Options,
 ) (common.VkResult, error) {
@@ -336,8 +334,8 @@ func (a *Allocator) allocateDedicatedMemory(
 		allocFlagsInfo := core1_1.MemoryAllocateFlagsInfo{}
 		canContainBufferWithDeviceAddress := true
 		if dedicatedBuffer != nil {
-			canContainBufferWithDeviceAddress = dedicatedBufferUsage == -1 ||
-				dedicatedBufferUsage&khr_buffer_device_address.BufferUsageShaderDeviceAddress != 0
+			canContainBufferWithDeviceAddress = dedicatedBufferOrImageUsage == nil ||
+				(core1_0.BufferUsageFlags(*dedicatedBufferOrImageUsage)&khr_buffer_device_address.BufferUsageShaderDeviceAddress != 0)
 		} else if dedicatedImage != nil {
 			canContainBufferWithDeviceAddress = false
 		}
@@ -410,9 +408,9 @@ func (a *Allocator) allocateMemoryOfType(
 	alignment uint,
 	dedicatedPreferred bool,
 	dedicatedBuffer core1_0.Buffer,
-	dedicatedBufferUsage core1_0.BufferUsageFlags,
 	dedicatedImage core1_0.Image,
-	createInfo AllocationCreateInfo,
+	dedicatedBufferOrImageUsage *uint32,
+	createInfo *AllocationCreateInfo,
 	memoryTypeIndex int,
 	suballocationType metadata.SuballocationType,
 	dedicatedAllocations *dedicatedAllocationList,
@@ -425,7 +423,7 @@ func (a *Allocator) allocateMemoryOfType(
 
 	finalCreateInfo := createInfo
 
-	res, err := a.calculateMemoryTypeParameters(&finalCreateInfo, memoryTypeIndex, size, len(allocations))
+	res, err := a.calculateMemoryTypeParameters(finalCreateInfo, memoryTypeIndex, size, len(allocations))
 	if err != nil {
 		return res, err
 	}
@@ -445,8 +443,8 @@ func (a *Allocator) allocateMemoryOfType(
 			finalCreateInfo.UserData,
 			finalCreateInfo.Priority,
 			dedicatedBuffer,
-			dedicatedBufferUsage,
 			dedicatedImage,
+			dedicatedBufferOrImageUsage,
 			allocations,
 			blockAllocations.allocOptions,
 		)
@@ -463,7 +461,7 @@ func (a *Allocator) allocateMemoryOfType(
 		// We don't want to create all allocations as dedicated when we're near maximum size, so don't prefer
 		// allocations when we're nearing the maximum number of allocations
 		if a.deviceMemory.DeviceProperties().Limits.MaxMemoryAllocationCount < math.MaxUint32/4 &&
-			atomic.LoadUint32(&a.deviceMemoryCount) > uint32(a.deviceMemory.DeviceProperties().Limits.MaxMemoryAllocationCount*3/4) {
+			a.deviceMemory.AllocationCount() > uint32(a.deviceMemory.DeviceProperties().Limits.MaxMemoryAllocationCount*3/4) {
 			dedicatedPreferred = false
 		}
 
@@ -480,8 +478,8 @@ func (a *Allocator) allocateMemoryOfType(
 				finalCreateInfo.UserData,
 				finalCreateInfo.Priority,
 				dedicatedBuffer,
-				dedicatedBufferUsage,
 				dedicatedImage,
+				dedicatedBufferOrImageUsage,
 				allocations,
 				blockAllocations.allocOptions,
 			)
@@ -494,7 +492,7 @@ func (a *Allocator) allocateMemoryOfType(
 	res, err = blockAllocations.Allocate(
 		size,
 		alignment,
-		&finalCreateInfo,
+		finalCreateInfo,
 		suballocationType,
 		allocations,
 	)
@@ -516,8 +514,8 @@ func (a *Allocator) allocateMemoryOfType(
 			finalCreateInfo.UserData,
 			finalCreateInfo.Priority,
 			dedicatedBuffer,
-			dedicatedBufferUsage,
 			dedicatedImage,
+			dedicatedBufferOrImageUsage,
 			allocations,
 			blockAllocations.allocOptions,
 		)
@@ -549,13 +547,27 @@ func (a *Allocator) multiAllocateMemory(
 		return core1_0.VKErrorInitializationFailed, core1_0.VKErrorInitializationFailed.ToError()
 	}
 
-	res, err := a.calcAllocationParams(options, requiresDedicatedAllocation, prefersDedicatedAllocation)
+	res, err := a.calcAllocationParams(options, requiresDedicatedAllocation)
 	if err != nil {
 		return res, err
 	}
 
 	if options.Pool != nil {
-		//TODO: Pool
+		return a.allocateMemoryOfType(
+			options.Pool,
+			memoryRequirements.Size,
+			uint(memoryRequirements.Alignment),
+			prefersDedicatedAllocation,
+			dedicatedBuffer,
+			dedicatedImage,
+			dedicatedBufferOrImageUsage,
+			options,
+			options.Pool.blockList.memoryTypeIndex,
+			suballocType,
+			&options.Pool.dedicatedAllocations,
+			&options.Pool.blockList,
+			outAllocations,
+		)
 	}
 
 	memoryBits := memoryRequirements.MemoryTypeBits
@@ -564,14 +576,50 @@ func (a *Allocator) multiAllocateMemory(
 		return res, err
 	}
 
-	for err != nil {
-		//Todo: Block vectors
+	for err == nil {
+		blockList := a.memoryBlockLists[memoryTypeIndex]
+		if blockList == nil {
+			return core1_0.VKErrorUnknown, errors.Newf("attempted to allocate from unsupported memory type index %d", memoryTypeIndex)
+		}
+
+		res, err = a.allocateMemoryOfType(
+			nil,
+			memoryRequirements.Size,
+			uint(memoryRequirements.Alignment),
+			requiresDedicatedAllocation || prefersDedicatedAllocation,
+			dedicatedBuffer,
+			dedicatedImage,
+			dedicatedBufferOrImageUsage,
+			options,
+			memoryTypeIndex,
+			suballocType,
+			a.dedicatedAllocations[memoryTypeIndex],
+			blockList,
+			outAllocations,
+		)
+
+		// Allocation succeeded (or irrevocably failed)
+		if err == nil || res == core1_0.VKErrorUnknown {
+			return res, err
+		}
+
+		// Remove memory type index from possibilities
+		memoryBits &= ^(1 << memoryTypeIndex)
+		// Find a new memorytypeindex
+		memoryTypeIndex, res, err = a.findMemoryTypeIndex(memoryBits, *options, dedicatedBufferOrImageUsage)
 	}
 
 	return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
 }
 
 func (a *Allocator) AllocateMemory(memoryRequirements core1_0.MemoryRequirements, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
+	if outAlloc == nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil allocation")
+	}
+
+	a.logger.Debug("AllocateMemory")
+
+	outAllocSlice := unsafe.Slice(outAlloc, 1)
 	res, err := a.multiAllocateMemory(
 		memoryRequirements,
 		false,
@@ -579,15 +627,15 @@ func (a *Allocator) AllocateMemory(memoryRequirements core1_0.MemoryRequirements
 		nil, nil, nil,
 		&o,
 		metadata.SuballocationUnknown,
-		1,
+		outAllocSlice,
 	)
 	return res, err
 }
 
-func (a *Allocator) FreeDedicatedMemory(alloc *Allocation) error {
+func (a *Allocator) freeDedicatedMemory(alloc *Allocation) error {
 	if alloc == nil {
 		return errors.New("attempted to free nil allocation")
-	} else if alloc.allocationType != AllocationTypeDedicated {
+	} else if alloc.allocationType != allocationTypeDedicated {
 		return errors.New("attempted to free dedicated memory for a non-dedicated allocation")
 	}
 
@@ -603,7 +651,10 @@ func (a *Allocator) FreeDedicatedMemory(alloc *Allocation) error {
 		}
 	} else {
 		// Custom pool
-		parentPool.unregisterDedicatedAllocation(alloc)
+		err := parentPool.dedicatedAllocations.Unregister(alloc)
+		if err != nil {
+			return err
+		}
 	}
 
 	a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, alloc.Size(), alloc.memory)

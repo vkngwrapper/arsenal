@@ -36,7 +36,7 @@ func NewPool(allocator *Allocator, createInfo PoolCreateInfo, preferredBlockSize
 	}
 	bufferImageGranularity := 1
 	if createInfo.Flags&PoolCreateIgnoreBufferImageGranularity == 0 {
-		bufferImageGranularity = allocator.calculateBufferImageGranularity()
+		bufferImageGranularity = allocator.deviceMemory.CalculateBufferImageGranularity()
 	}
 
 	alignment := allocator.deviceMemory.MemoryTypeMinimumAlignment(createInfo.MemoryTypeIndex)
@@ -82,8 +82,4 @@ func (p *Pool) ID() int {
 
 func (p *Pool) Name() string {
 	return p.name
-}
-
-func (p *Pool) unregisterDedicatedAllocation(alloc *Allocation) {
-	p.dedicatedAllocations.Unregister(alloc)
 }

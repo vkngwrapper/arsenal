@@ -37,9 +37,9 @@ func init() {
 }
 
 const (
-	// DefaultLargeHeapBlockSize is the value that is used as the PreferredLargeHeapBlockSize when none
+	// defaultLargeHeapBlockSize is the value that is used as the PreferredLargeHeapBlockSize when none
 	// is provided via CreateOptions. It is equal to 256Mb.
-	DefaultLargeHeapBlockSize int = 256 * 1024 * 1024
+	defaultLargeHeapBlockSize int = 256 * 1024 * 1024
 )
 
 // CreateOptions contains optional settings when creating an allocator
@@ -103,12 +103,10 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 	}
 
 	if options.PreferredLargeHeapBlockSize == 0 {
-		allocator.preferredLargeHeapBlockSize = DefaultLargeHeapBlockSize
+		allocator.preferredLargeHeapBlockSize = defaultLargeHeapBlockSize
 	} else {
 		allocator.preferredLargeHeapBlockSize = options.PreferredLargeHeapBlockSize
 	}
-
-	allocator.globalMemoryTypeBits = allocator.calculateGlobalMemoryTypeBits()
 
 	heapTypeCount := len(options.HeapSizeLimits)
 	externalMemoryTypes := make([]khr_external_memory_capabilities.ExternalMemoryHandleTypeFlags, heapTypeCount)
@@ -136,6 +134,8 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 		return nil, err
 	}
 
+	allocator.globalMemoryTypeBits = allocator.deviceMemory.CalculateGlobalMemoryTypeBits()
+
 	// Initialize memory block lists
 	typeCount := allocator.deviceMemory.MemoryTypeCount()
 	for typeIndex := 0; typeIndex < typeCount; typeIndex++ {
@@ -144,6 +144,7 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 			if err != nil {
 				return nil, err
 			}
+			allocator.memoryBlockLists[typeIndex] = &memoryBlockList{}
 
 			allocator.memoryBlockLists[typeIndex].Init(
 				useMutex,
@@ -152,7 +153,7 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 				preferredBlockSize,
 				0,
 				math.MaxInt,
-				allocator.calculateBufferImageGranularity(),
+				allocator.deviceMemory.CalculateBufferImageGranularity(),
 				false,
 				0,
 				0.5,
@@ -183,25 +184,4 @@ func (a *Allocator) calculatePreferredBlockSize(memTypeIndex int) (int, error) {
 	}
 
 	return memutils.AlignUp(rawSize, 32), nil
-}
-
-func (a *Allocator) calculateGlobalMemoryTypeBits() uint32 {
-	var typeBits uint32
-
-	memTypeCount := a.deviceMemory.MemoryTypeCount()
-	for memoryTypeIndex := 0; memoryTypeIndex < memTypeCount; memoryTypeIndex++ {
-		// TODO: AMD coherent memory exclude
-		typeBits |= 1 << memoryTypeIndex
-	}
-
-	return typeBits
-}
-
-func (a *Allocator) calculateBufferImageGranularity() int {
-	granularity := a.deviceMemory.DeviceProperties().Limits.BufferImageGranularity
-
-	if granularity < 1 {
-		return 1
-	}
-	return granularity
 }

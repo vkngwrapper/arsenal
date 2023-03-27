@@ -12,46 +12,46 @@ import (
 	"unsafe"
 )
 
-type AllocationType byte
+type allocationType byte
 
 const (
-	AllocationTypeNone AllocationType = iota
-	AllocationTypeBlock
-	AllocationTypeDedicated
+	allocationTypeNone allocationType = iota
+	allocationTypeBlock
+	allocationTypeDedicated
 )
 
-var allocationTypeMapping = make(map[AllocationType]string)
+var allocationTypeMapping = make(map[allocationType]string)
 
-func (t AllocationType) String() string {
+func (t allocationType) String() string {
 	return allocationTypeMapping[t]
 }
 
 func init() {
-	allocationTypeMapping[AllocationTypeNone] = "AllocationTypeNone"
-	allocationTypeMapping[AllocationTypeBlock] = "AllocationTypeBlock"
-	allocationTypeMapping[AllocationTypeDedicated] = "AllocationTypeDedicated"
+	allocationTypeMapping[allocationTypeNone] = "allocationTypeNone"
+	allocationTypeMapping[allocationTypeBlock] = "allocationTypeBlock"
+	allocationTypeMapping[allocationTypeDedicated] = "allocationTypeDedicated"
 }
 
-type AllocationFlags uint32
+type allocationFlags uint32
 
 const (
-	AllocationPersistentMap AllocationFlags = 1 << iota
-	AllocationMappingAllowed
+	allocationPersistentMap allocationFlags = 1 << iota
+	allocationMappingAllowed
 )
 
-var allocationFlagsMapping = common.NewFlagStringMapping[AllocationFlags]()
+var allocationFlagsMapping = common.NewFlagStringMapping[allocationFlags]()
 
 func init() {
-	allocationFlagsMapping.Register(AllocationPersistentMap, "AllocationPersistentMap")
-	allocationFlagsMapping.Register(AllocationMappingAllowed, "AllocationMappingAllowed")
+	allocationFlagsMapping.Register(allocationPersistentMap, "allocationPersistentMap")
+	allocationFlagsMapping.Register(allocationMappingAllowed, "allocationMappingAllowed")
 }
 
-type BlockData struct {
+type blockData struct {
 	handle metadata.BlockAllocationHandle
 	block  *deviceMemoryBlock
 }
 
-type DedicatedData struct {
+type dedicatedData struct {
 	parentPool *Pool
 	nextAlloc  *Allocation
 	prevAlloc  *Allocation
@@ -62,22 +62,22 @@ type Allocation struct {
 	size      int
 	userData  any
 	name      string
-	flags     AllocationFlags
+	flags     allocationFlags
 
 	memoryTypeIndex   int
-	allocationType    AllocationType
+	allocationType    allocationType
 	suballocationType metadata.SuballocationType
 	deviceMemory      *vulkan.DeviceMemoryProperties
 	memory            *vulkan.SynchronizedMemory
 
-	blockData     BlockData
-	dedicatedData DedicatedData
+	blockData     blockData
+	dedicatedData dedicatedData
 }
 
 func (a *Allocation) init(deviceMemory *vulkan.DeviceMemoryProperties, mappingAllowed bool) {
-	var flags AllocationFlags
+	var flags allocationFlags
 	if mappingAllowed {
-		flags = AllocationMappingAllowed
+		flags = allocationMappingAllowed
 	}
 	a.alignment = 1
 	a.size = 0
@@ -112,14 +112,14 @@ func (a *Allocation) initBlockAllocation(
 	if block == nil || block.memory == nil {
 		return errors.New("attempting to init a block allocation using a nil memory block")
 	}
-	a.allocationType = AllocationTypeBlock
+	a.allocationType = allocationTypeBlock
 	a.alignment = alignment
 	a.size = size
 	a.memoryTypeIndex = memoryTypeIndex
 	if mapped && !a.IsMappingAllowed() {
 		return errors.New("attempting to initialize an allocation for mapping that was created without mapping capabilities")
 	} else if mapped {
-		a.flags |= AllocationPersistentMap
+		a.flags |= allocationPersistentMap
 	}
 
 	a.suballocationType = suballocationType
@@ -144,7 +144,7 @@ func (a *Allocation) initDedicatedAllocation(
 	if memory == nil {
 		return errors.New("attempting to init a dedicated allocation using a nil device memory")
 	}
-	a.allocationType = AllocationTypeDedicated
+	a.allocationType = allocationTypeDedicated
 	a.alignment = 0
 	a.size = size
 	a.memoryTypeIndex = memoryTypeIndex
@@ -152,7 +152,7 @@ func (a *Allocation) initDedicatedAllocation(
 	if mappedData != nil && !a.IsMappingAllowed() {
 		return errors.New("attempting to initialize an allocation for mapping that was created without mapping capabilities")
 	} else if mappedData != nil {
-		a.flags |= AllocationPersistentMap
+		a.flags |= allocationPersistentMap
 	}
 
 	a.dedicatedData.parentPool = parentPool
@@ -180,8 +180,8 @@ func (a *Allocation) Name() string {
 func (a *Allocation) MemoryTypeIndex() int         { return a.memoryTypeIndex }
 func (a *Allocation) Size() int                    { return a.size }
 func (a *Allocation) Memory() core1_0.DeviceMemory { return a.memory.VulkanDeviceMemory() }
-func (a *Allocation) isPersistentMap() bool        { return a.flags&AllocationPersistentMap != 0 }
-func (a *Allocation) IsMappingAllowed() bool       { return a.flags&AllocationMappingAllowed != 0 }
+func (a *Allocation) isPersistentMap() bool        { return a.flags&allocationPersistentMap != 0 }
+func (a *Allocation) IsMappingAllowed() bool       { return a.flags&allocationMappingAllowed != 0 }
 func (a *Allocation) MemoryProperties() core1_0.MemoryPropertyFlags {
 	return a.deviceMemory.MemoryTypeProperties(a.memoryTypeIndex).PropertyFlags
 }
@@ -201,7 +201,7 @@ func (a *Allocation) mappedData() (unsafe.Pointer, error) {
 }
 
 func (a *Allocation) FindOffset() (int, error) {
-	if a.allocationType == AllocationTypeBlock {
+	if a.allocationType == allocationTypeBlock {
 		return a.blockData.block.metadata.AllocationOffset(a.blockData.handle)
 	}
 
@@ -232,9 +232,9 @@ func (a *Allocation) Unmap() error {
 
 func (a *Allocation) BindBufferMemory(offset int, buffer core1_0.Buffer, next common.Options) (common.VkResult, error) {
 	switch a.allocationType {
-	case AllocationTypeDedicated:
+	case allocationTypeDedicated:
 		return a.memory.BindVulkanBuffer(offset, buffer, next)
-	case AllocationTypeBlock:
+	case allocationTypeBlock:
 		allocOffset, err := a.FindOffset()
 		if err != nil {
 			return core1_0.VKErrorUnknown, err
@@ -247,9 +247,9 @@ func (a *Allocation) BindBufferMemory(offset int, buffer core1_0.Buffer, next co
 
 func (a *Allocation) BindImageMemory(offset int, image core1_0.Image, next common.Options) (common.VkResult, error) {
 	switch a.allocationType {
-	case AllocationTypeDedicated:
+	case allocationTypeDedicated:
 		return a.memory.BindVulkanImage(offset, image, next)
-	case AllocationTypeBlock:
+	case allocationTypeBlock:
 		allocOffset, err := a.FindOffset()
 		if err != nil {
 			return core1_0.VKErrorUnknown, err
@@ -260,7 +260,7 @@ func (a *Allocation) BindImageMemory(offset int, image core1_0.Image, next commo
 	return core1_0.VKErrorUnknown, errors.Newf("attempted to bind an allocation with an unknown type: %s", a.allocationType.String())
 }
 
-func (a *Allocation) PrintParameters(json *jwriter.ObjectState) {
+func (a *Allocation) printParameters(json *jwriter.ObjectState) {
 	json.Name("Type").String(a.suballocationType.String())
 	json.Name("Size").Int(a.size)
 	//json.Name("Buffer Usage").String(a.bufferUsage.String())
@@ -296,7 +296,7 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 	outRange.Size = allocationSize - outRange.Offset
 
 	switch a.allocationType {
-	case AllocationTypeDedicated:
+	case allocationTypeDedicated:
 		if size > 0 {
 			alignedSize := memutils.AlignUp(size+(offset-outRange.Offset), uint(nonCoherentAtomSize))
 			if alignedSize < outRange.Size {
@@ -304,7 +304,7 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 			}
 		}
 		return true, nil
-	case AllocationTypeBlock:
+	case allocationTypeBlock:
 		// Calculate Size within the allocation
 		if size == -1 {
 			size = outRange.Size
@@ -333,7 +333,7 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 	return false, errors.Newf("attempted to get the flush or invalidate range of an allocation with invalid type %s", a.allocationType.String())
 }
 
-func (a *Allocation) FlushOrInvalidateAllocation(offset, size int, operation vulkan.CacheOperation) (common.VkResult, error) {
+func (a *Allocation) flushOrInvalidateAllocation(offset, size int, operation vulkan.CacheOperation) (common.VkResult, error) {
 	var memRange core1_0.MappedMemoryRange
 	success, err := a.flushOrInvalidateRange(offset, size, &memRange)
 	if err != nil {
@@ -362,7 +362,7 @@ func (a *Allocation) fillAllocation(pattern uint8) (common.VkResult, error) {
 		*(*uint8)(data) = pattern
 		data = unsafe.Add(data, 1)
 	}
-	res, err = a.FlushOrInvalidateAllocation(0, -1, vulkan.CacheOperationFlush)
+	res, err = a.flushOrInvalidateAllocation(0, -1, vulkan.CacheOperationFlush)
 	if err != nil {
 		return res, err
 	}
@@ -375,14 +375,14 @@ func (a *Allocation) fillAllocation(pattern uint8) (common.VkResult, error) {
 }
 
 func (a *Allocation) nextDedicatedAlloc() (*Allocation, error) {
-	if a.allocationType != AllocationTypeDedicated {
+	if a.allocationType != allocationTypeDedicated {
 		return nil, errors.New("attempted to get the next dedicated allocation in the linked list, but this is not a dedicated allocation")
 	}
 	return a.dedicatedData.nextAlloc, nil
 }
 
 func (a *Allocation) setNext(alloc *Allocation) error {
-	if a.allocationType != AllocationTypeDedicated {
+	if a.allocationType != allocationTypeDedicated {
 		return errors.New("attempted to set the next dedicated allocation in the linked list, but this is not a dedicated allocation")
 	}
 
@@ -391,7 +391,7 @@ func (a *Allocation) setNext(alloc *Allocation) error {
 }
 
 func (a *Allocation) prevDedicatedAlloc() (*Allocation, error) {
-	if a.allocationType != AllocationTypeDedicated {
+	if a.allocationType != allocationTypeDedicated {
 		return nil, errors.New("attempted to get the prev dedicated allocation in the linked list, but this is not a dedicated allocation")
 	}
 
@@ -399,7 +399,7 @@ func (a *Allocation) prevDedicatedAlloc() (*Allocation, error) {
 }
 
 func (a *Allocation) setPrev(alloc *Allocation) error {
-	if a.allocationType != AllocationTypeDedicated {
+	if a.allocationType != allocationTypeDedicated {
 		return errors.New("attempted to set the prev dedicated allocation in the linked list, but this is not a dedicated allocation")
 	}
 

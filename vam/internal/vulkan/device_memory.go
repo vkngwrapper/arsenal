@@ -342,3 +342,36 @@ func (m *DeviceMemoryProperties) FlushOrInvalidateAllocations(memRanges []core1_
 
 	return core1_0.VKErrorUnknown, errors.Newf("attempted to carry out invalid cache operation %s", operation.String())
 }
+
+const (
+	smallHeapMaxSize int = 1024 * 1024 * 1024 // 1 GB
+)
+
+func (m *DeviceMemoryProperties) CalculateGlobalMemoryTypeBits() uint32 {
+	var typeBits uint32
+
+	memTypeCount := len(m.memoryProperties.MemoryTypes)
+	for memoryTypeIndex := 0; memoryTypeIndex < memTypeCount; memoryTypeIndex++ {
+		// TODO: AMD coherent memory exclude
+		typeBits |= 1 << memoryTypeIndex
+	}
+
+	return typeBits
+}
+
+func (m *DeviceMemoryProperties) CalculateBufferImageGranularity() int {
+	granularity := m.deviceProperties.Limits.BufferImageGranularity
+
+	if granularity < 1 {
+		return 1
+	}
+	return granularity
+}
+
+func (m *DeviceMemoryProperties) AllocationCount() uint32 {
+	return atomic.LoadUint32(&m.memoryCount)
+}
+
+func (m *DeviceMemoryProperties) IsIntegratedGPU() bool {
+	return m.deviceProperties.DriverType == core1_0.PhysicalDeviceTypeIntegratedGPU
+}

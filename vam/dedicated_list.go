@@ -90,7 +90,7 @@ func (l *dedicatedAllocationList) BuildStatsString(s *jwriter.ArrayState) error 
 		}
 
 		o := s.Object()
-		alloc.PrintParameters(&o)
+		alloc.printParameters(&o)
 		o.End()
 	}
 

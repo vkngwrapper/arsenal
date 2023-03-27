@@ -682,7 +682,7 @@ func (l *memoryBlockList) printDetailedMapAllocations(md metadata.BlockMetadata,
 				}
 
 				if isAllocation && alloc != nil {
-					alloc.PrintParameters(&obj)
+					alloc.printParameters(&obj)
 				} else if userData != nil {
 					obj.Name("CustomData").String(fmt.Sprintf("%+v", userData))
 				}
