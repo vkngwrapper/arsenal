@@ -79,6 +79,10 @@ func NewTLSFBlockMetadata(bufferImageGranularity int, isVirtual bool) *tlsfBlock
 	}
 }
 
+func (m *tlsfBlockMetadata) Destroy() {
+	m.granularityHandler.Destroy()
+}
+
 func (m *tlsfBlockMetadata) allocateBlock() *tlsfBlock {
 	b := m.blockAllocator.Get().(*tlsfBlock)
 	b.offset = 0
@@ -691,10 +695,7 @@ func (m *tlsfBlockMetadata) Alloc(req *AllocationRequest, suballocType Suballoca
 	}
 
 	if currentBlock != m.nullBlock {
-		err := m.removeFreeBlock(currentBlock)
-		if err != nil {
-			return err
-		}
+		m.removeFreeBlock(currentBlock)
 	}
 
 	debugMargin := m.getDebugMargin()
@@ -715,16 +716,10 @@ func (m *tlsfBlockMetadata) Alloc(req *AllocationRequest, suballocType Suballoca
 			// If the new block size moves the block around
 			if oldListIndex != m.getListIndexFromSize(prevBlock.size) {
 				prevBlock.size -= missingAlignment
-				err := m.removeFreeBlock(prevBlock)
-				if err != nil {
-					return err
-				}
+				m.removeFreeBlock(prevBlock)
 
 				prevBlock.size += missingAlignment
-				err = m.insertFreeBlock(prevBlock)
-				if err != nil {
-					return err
-				}
+				m.insertFreeBlock(prevBlock)
 			} else {
 				m.blocksFreeSize += missingAlignment
 			}
@@ -738,10 +733,7 @@ func (m *tlsfBlockMetadata) Alloc(req *AllocationRequest, suballocType Suballoca
 			newBlock.offset = currentBlock.offset
 			newBlock.MarkTaken()
 
-			err := m.insertFreeBlock(newBlock)
-			if err != nil {
-				return err
-			}
+			m.insertFreeBlock(newBlock)
 		}
 
 		currentBlock.size -= missingAlignment
@@ -784,10 +776,7 @@ func (m *tlsfBlockMetadata) Alloc(req *AllocationRequest, suballocType Suballoca
 		} else {
 			newBlock.nextPhysical.prevPhysical = newBlock
 			newBlock.MarkTaken()
-			err := m.insertFreeBlock(newBlock)
-			if err != nil {
-				return err
-			}
+			m.insertFreeBlock(newBlock)
 		}
 	}
 
@@ -803,10 +792,7 @@ func (m *tlsfBlockMetadata) Alloc(req *AllocationRequest, suballocType Suballoca
 		newBlock.MarkTaken()
 		currentBlock.nextPhysical.prevPhysical = newBlock
 		currentBlock.nextPhysical = newBlock
-		err := m.insertFreeBlock(newBlock)
-		if err != nil {
-			return err
-		}
+		m.insertFreeBlock(newBlock)
 	}
 
 	if !m.isVirtual {
@@ -838,15 +824,10 @@ func (m *tlsfBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 
 	debugMargin := m.getDebugMargin()
 	if debugMargin > 0 {
-		err := m.removeFreeBlock(next)
-		if err != nil {
-			return err
-		}
+		m.removeFreeBlock(next)
 
-		err = m.mergeBlock(next, block)
-		if err != nil {
-			return err
-		}
+		m.mergeBlock(next, block)
+
 		block = next
 		next = next.nextPhysical
 	}
@@ -854,51 +835,31 @@ func (m *tlsfBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 	// Try merging
 	prev := block.prevPhysical
 	if prev != nil && prev.IsFree() && prev.size != debugMargin {
-		err := m.removeFreeBlock(prev)
-		if err != nil {
-			return err
-		}
-
-		err = m.mergeBlock(block, prev)
-		if err != nil {
-			return err
-		}
+		m.removeFreeBlock(prev)
+		m.mergeBlock(block, prev)
 	}
 
 	if !next.IsFree() {
-		err := m.insertFreeBlock(block)
-		if err != nil {
-			return err
-		}
+		m.insertFreeBlock(block)
 	} else if next == m.nullBlock {
-		err := m.mergeBlock(m.nullBlock, block)
-		if err != nil {
-			return err
-		}
+		m.mergeBlock(m.nullBlock, block)
 	} else {
-		err := m.removeFreeBlock(next)
-		if err != nil {
-			return err
-		}
-		err = m.mergeBlock(next, block)
-		if err != nil {
-			return err
-		}
-		err = m.insertFreeBlock(next)
-		if err != nil {
-		}
-		return err
+		m.removeFreeBlock(next)
+		m.mergeBlock(next, block)
+
+		m.insertFreeBlock(next)
+		return nil
 	}
 
 	return nil
 }
 
-func (m *tlsfBlockMetadata) removeFreeBlock(block *tlsfBlock) error {
+func (m *tlsfBlockMetadata) removeFreeBlock(block *tlsfBlock) {
 	if block == m.nullBlock {
-		return errors.New("cannot remove the null block")
+		panic("cannot remove the null block")
 	}
 	if !block.IsFree() {
-		return errors.New("provided block is not free")
+		panic("provided block is not free")
 	}
 
 	// Remove from free list chain
@@ -913,7 +874,7 @@ func (m *tlsfBlockMetadata) removeFreeBlock(block *tlsfBlock) error {
 		index := m.getListIndex(memClass, secondIndex)
 
 		if m.freeList[index] != block {
-			return errors.New("block was not in the free list at the expected location")
+			panic("block was not in the free list at the expected location")
 		}
 		m.freeList[index] = block.nextFree
 		if block.nextFree == nil {
@@ -929,17 +890,15 @@ func (m *tlsfBlockMetadata) removeFreeBlock(block *tlsfBlock) error {
 	block.userData = nil
 	m.blocksFreeCount--
 	m.blocksFreeSize -= block.size
-
-	return nil
 }
 
-func (m *tlsfBlockMetadata) insertFreeBlock(block *tlsfBlock) error {
+func (m *tlsfBlockMetadata) insertFreeBlock(block *tlsfBlock) {
 	if block == m.nullBlock {
-		return errors.New("cannot insert the null block")
+		panic("cannot insert the null block")
 	}
 
 	if block.IsFree() {
-		return errors.New("block is already free")
+		panic("block is already free")
 	}
 
 	memClass := m.sizeToMemoryClass(block.size)
@@ -947,7 +906,7 @@ func (m *tlsfBlockMetadata) insertFreeBlock(block *tlsfBlock) error {
 	index := m.getListIndex(memClass, secondIndex)
 
 	if index >= m.listsCount {
-		return errors.New("invalid free list index found for block")
+		panic("invalid free list index found for block")
 	}
 
 	block.prevFree = nil
@@ -961,16 +920,14 @@ func (m *tlsfBlockMetadata) insertFreeBlock(block *tlsfBlock) error {
 	}
 	m.blocksFreeCount++
 	m.blocksFreeSize += block.size
-
-	return nil
 }
 
-func (m *tlsfBlockMetadata) mergeBlock(block *tlsfBlock, prev *tlsfBlock) error {
+func (m *tlsfBlockMetadata) mergeBlock(block *tlsfBlock, prev *tlsfBlock) {
 	if block.prevPhysical != prev {
-		return errors.New("cannot merge separate physical regions")
+		panic("cannot merge separate physical regions")
 	}
 	if prev.IsFree() {
-		return errors.New("cannot merge a block that belongs to the free list")
+		panic("cannot merge a block that belongs to the free list")
 	}
 
 	block.offset = prev.offset
@@ -981,8 +938,6 @@ func (m *tlsfBlockMetadata) mergeBlock(block *tlsfBlock, prev *tlsfBlock) error 
 	}
 
 	m.freeBlock(prev)
-
-	return nil
 }
 
 func (m *tlsfBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool)) {

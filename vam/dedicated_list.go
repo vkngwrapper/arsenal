@@ -26,11 +26,7 @@ func (l *dedicatedAllocationList) Validate() error {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 
-	var err error
-	for alloc := l.allocationListHead; alloc != nil; alloc, err = alloc.nextDedicatedAlloc() {
-		if err != nil {
-			return err
-		}
+	for alloc := l.allocationListHead; alloc != nil; alloc = alloc.nextDedicatedAlloc() {
 		actualCount++
 	}
 
@@ -41,23 +37,16 @@ func (l *dedicatedAllocationList) Validate() error {
 	return nil
 }
 
-func (l *dedicatedAllocationList) AddDetailedStatistics(stats *memutils.DetailedStatistics) error {
-	var err error
-	for item := l.allocationListHead; item != nil; item, err = item.nextDedicatedAlloc() {
-		if err != nil {
-			return err
-		}
-
+func (l *dedicatedAllocationList) AddDetailedStatistics(stats *memutils.DetailedStatistics) {
+	for item := l.allocationListHead; item != nil; item = item.nextDedicatedAlloc() {
 		size := item.size
 		stats.Statistics.BlockCount++
 		stats.Statistics.BlockBytes += size
 		stats.AddAllocation(size)
 	}
-
-	return nil
 }
 
-func (l *dedicatedAllocationList) AddStatistics(stats *memutils.Statistics) error {
+func (l *dedicatedAllocationList) AddStatistics(stats *memutils.Statistics) {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 
@@ -65,36 +54,23 @@ func (l *dedicatedAllocationList) AddStatistics(stats *memutils.Statistics) erro
 	stats.BlockCount += allocCount
 	stats.AllocationCount += allocCount
 
-	var err error
-	for item := l.allocationListHead; item != nil; item, err = item.nextDedicatedAlloc() {
-		if err != nil {
-			return err
-		}
-
+	for item := l.allocationListHead; item != nil; item = item.nextDedicatedAlloc() {
 		size := item.size
 		stats.BlockBytes += size
 		stats.AllocationCount += size
 	}
-
-	return nil
 }
 
-func (l *dedicatedAllocationList) BuildStatsString(s *jwriter.ArrayState) error {
+func (l *dedicatedAllocationList) BuildStatsString(s *jwriter.ArrayState) {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
 
-	var err error
-	for alloc := l.allocationListHead; alloc != nil; alloc, err = alloc.nextDedicatedAlloc() {
-		if err != nil {
-			return err
-		}
+	for alloc := l.allocationListHead; alloc != nil; alloc = alloc.nextDedicatedAlloc() {
 
 		o := s.Object()
 		alloc.printParameters(&o)
 		o.End()
 	}
-
-	return nil
 }
 
 func (l *dedicatedAllocationList) IsEmpty() bool {
@@ -104,82 +80,52 @@ func (l *dedicatedAllocationList) IsEmpty() bool {
 	return l.count == 0
 }
 
-func (l *dedicatedAllocationList) Register(alloc *Allocation) error {
+func (l *dedicatedAllocationList) Register(alloc *Allocation) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 
-	return l.pushAllocation(alloc)
+	l.pushAllocation(alloc)
 }
 
-func (l *dedicatedAllocationList) Unregister(alloc *Allocation) error {
+func (l *dedicatedAllocationList) Unregister(alloc *Allocation) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 
-	return l.removeAllocation(alloc)
+	l.removeAllocation(alloc)
 }
 
-func (l *dedicatedAllocationList) removeAllocation(alloc *Allocation) error {
-	prev, err := alloc.prevDedicatedAlloc()
-	if err != nil {
-		return err
-	}
-
-	next, err := alloc.nextDedicatedAlloc()
-	if err != nil {
-		return err
-	}
+func (l *dedicatedAllocationList) removeAllocation(alloc *Allocation) {
+	prev := alloc.prevDedicatedAlloc()
+	next := alloc.nextDedicatedAlloc()
 
 	if prev != nil {
-		err = prev.setNext(next)
-		if err != nil {
-			return err
-		}
+		prev.setNext(next)
 	} else {
 		l.allocationListHead = next
 	}
 
 	if next != nil {
-		err = next.setPrev(prev)
-		if err != nil {
-			return err
-		}
+		next.setPrev(prev)
 	} else {
 		l.allocationListTail = prev
 	}
 
-	err = alloc.setNext(nil)
-	if err != nil {
-		return err
-	}
-
-	err = alloc.setPrev(nil)
-	if err != nil {
-		return err
-	}
+	alloc.setNext(nil)
+	alloc.setPrev(nil)
 
 	l.count--
-	return nil
 }
 
-func (l *dedicatedAllocationList) pushAllocation(alloc *Allocation) error {
+func (l *dedicatedAllocationList) pushAllocation(alloc *Allocation) {
 	if l.count == 0 {
 		l.allocationListHead = alloc
 		l.allocationListTail = alloc
 		l.count = 1
 	} else {
-		err := alloc.setPrev(l.allocationListTail)
-		if err != nil {
-			return err
-		}
-
-		err = l.allocationListTail.setNext(alloc)
-		if err != nil {
-			return err
-		}
+		alloc.setPrev(l.allocationListTail)
+		l.allocationListTail.setNext(alloc)
 
 		l.allocationListTail = alloc
 		l.count++
 	}
-
-	return nil
 }

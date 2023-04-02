@@ -66,10 +66,11 @@ func (b *deviceMemoryBlock) Destroy() error {
 	}
 
 	if b.memory == nil {
-		return errors.New("attempting to destroy a memory block, but it did not have a backing vulkan memory handle")
+		panic("attempting to destroy a memory block, but it did not have a backing vulkan memory handle")
 	}
 
 	b.deviceMemory.FreeVulkanMemory(b.memoryTypeIndex, b.metadata.Size(), b.memory)
+	b.metadata.Destroy()
 
 	b.memory = nil
 	b.metadata = nil
@@ -160,7 +161,7 @@ func (b *deviceMemoryBlock) WriteMagicBlockAfterAllocation(allocOffset int, allo
 
 func (b *deviceMemoryBlock) ValidateMagicValueAfterAllocation(allocOffset int, allocSize int) (common.VkResult, error) {
 	if memutils.DebugMargin == 0 {
-		return core1_0.VKErrorUnknown, errors.New("attempting to validate a debug margin block outside debug mode")
+		panic("attempting to validate a debug margin block outside debug mode")
 	} else if memutils.DebugMargin%4 != 0 {
 		panic(fmt.Sprintf("invalid debug margin: debug margin %d must be a multiple of 4", memutils.DebugMargin))
 	}
@@ -170,15 +171,14 @@ func (b *deviceMemoryBlock) ValidateMagicValueAfterAllocation(allocOffset int, a
 		return res, err
 	}
 	defer func() {
-		unmapErr := b.memory.Unmap(1)
-		if err == nil && unmapErr != nil {
-			err = unmapErr
+		err = b.memory.Unmap(1)
+		if err != nil {
 			res = core1_0.VKErrorUnknown
 		}
 	}()
 
 	if !memutils.ValidateMagicValue(data, allocOffset+allocSize) {
-		return core1_0.VKErrorUnknown, errors.New("memory corruption detected after freed allocation")
+		panic("MEMORY CORRUPTION DETECTED AFTER FREED ALLOCATION")
 	}
 
 	return res, nil

@@ -3,6 +3,7 @@ package vam
 import (
 	"github.com/cockroachdb/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
+	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -91,15 +92,19 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 	useMutex := options.Flags&AllocatorCreateExternallySynchronized == 0
 
 	allocator := &Allocator{
-		useMutex:       useMutex,
-		logger:         logger,
-		instance:       instance,
-		physicalDevice: physicalDevice,
-		device:         device,
-		extensionData:  vulkan.NewExtensionData(device),
+		useMutex:            useMutex,
+		logger:              logger,
+		instance:            instance,
+		physicalDevice:      physicalDevice,
+		device:              device,
+		extensionData:       vulkan.NewExtensionData(device),
+		allocationCallbacks: options.VulkanCallbacks,
 
 		createFlags:                      options.Flags,
 		gpuDefragmentationMemoryTypeBits: math.MaxUint32,
+		poolsMutex: utils.OptionalRWMutex{
+			UseMutex: useMutex,
+		},
 	}
 
 	if options.PreferredLargeHeapBlockSize == 0 {
@@ -184,4 +189,32 @@ func (a *Allocator) calculatePreferredBlockSize(memTypeIndex int) (int, error) {
 	}
 
 	return memutils.AlignUp(rawSize, 32), nil
+}
+
+func (a *Allocator) Destroy() error {
+	a.poolsMutex.Lock()
+	defer a.poolsMutex.Unlock()
+
+	for memoryTypeIndex := 0; memoryTypeIndex < a.deviceMemory.MemoryTypeCount(); memoryTypeIndex++ {
+		if a.dedicatedAllocations[memoryTypeIndex] != nil && !a.dedicatedAllocations[memoryTypeIndex].IsEmpty() {
+			return errors.Newf("the allocator still has %d unfreed dedicated allocations for memory type %d", a.dedicatedAllocations[memoryTypeIndex].count, memoryTypeIndex)
+		}
+
+		if a.memoryBlockLists[memoryTypeIndex] != nil && !a.memoryBlockLists[memoryTypeIndex].HasNoAllocations() {
+			return errors.Newf("the allocator still has unfreed block allocations for memory type %d", memoryTypeIndex)
+		}
+	}
+
+	if a.pools != nil {
+		return errors.Newf("the allocator still has active pools that must be destroyed")
+	}
+
+	for memoryTypeIndex := 0; memoryTypeIndex < a.deviceMemory.MemoryTypeCount(); memoryTypeIndex++ {
+		err := a.memoryBlockLists[memoryTypeIndex].Destroy()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

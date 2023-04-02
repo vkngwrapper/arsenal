@@ -4,10 +4,12 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
+	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
 	"github.com/vkngwrapper/core/v2/core1_1"
+	"github.com/vkngwrapper/core/v2/driver"
 	"github.com/vkngwrapper/extensions/v2/khr_buffer_device_address"
 	"github.com/vkngwrapper/extensions/v2/khr_dedicated_allocation"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
@@ -18,11 +20,12 @@ import (
 )
 
 type Allocator struct {
-	useMutex       bool
-	logger         *slog.Logger
-	instance       core1_0.Instance
-	physicalDevice core1_0.PhysicalDevice
-	device         core1_0.Device
+	useMutex            bool
+	logger              *slog.Logger
+	instance            core1_0.Instance
+	physicalDevice      core1_0.PhysicalDevice
+	device              core1_0.Device
+	allocationCallbacks *driver.AllocationCallbacks
 
 	createFlags   CreateFlags
 	extensionData *vulkan.ExtensionData
@@ -31,6 +34,8 @@ type Allocator struct {
 	gpuDefragmentationMemoryTypeBits uint32
 	globalMemoryTypeBits             uint32
 	nextPoolId                       int
+	poolsMutex                       utils.OptionalRWMutex
+	pools                            *Pool
 
 	deviceMemory         *vulkan.DeviceMemoryProperties
 	memoryBlockLists     [common.MaxMemoryTypes]*memoryBlockList
@@ -65,7 +70,7 @@ func (a *Allocator) calcAllocationParams(
 
 	if o.Pool != nil {
 		if o.Pool.blockList.HasExplicitBlockSize() && o.Flags&memutils.AllocationCreateDedicatedMemory != 0 {
-			return core1_0.VKErrorFeatureNotPresent, errors.New("specified memutils.AllocationCreateDedicatedMemory with a pool that does not support it")
+			return core1_0.VKErrorUnknown, errors.New("specified memutils.AllocationCreateDedicatedMemory with a pool that does not support it")
 		}
 
 		o.Priority = o.Pool.blockList.priority
@@ -85,7 +90,7 @@ func (a *Allocator) calcAllocationParams(
 }
 
 func (a *Allocator) findMemoryPreferences(
-	o AllocationCreateInfo,
+	o *AllocationCreateInfo,
 	bufferOrImageUsage *uint32,
 ) (requiredFlags, preferredFlags, notPreferredFlags core1_0.MemoryPropertyFlags, err error) {
 	isIntegratedGPU := a.deviceMemory.IsIntegratedGPU()
@@ -161,9 +166,76 @@ func (a *Allocator) findMemoryPreferences(
 	return requiredFlags, preferredFlags, notPreferredFlags, nil
 }
 
-func (a *Allocator) findMemoryTypeIndex(
+func (a *Allocator) FindMemoryTypeIndex(
 	memoryTypeBits uint32,
 	o AllocationCreateInfo,
+) (int, common.VkResult, error) {
+	a.logger.Debug("Allocator::FindMemoryTypeIndex")
+
+	return a.findMemoryTypeIndex(memoryTypeBits, &o, nil)
+}
+
+func (a *Allocator) FindMemoryTypeIndexForBufferInfo(
+	bufferInfo core1_0.BufferCreateInfo,
+	o AllocationCreateInfo,
+) (int, common.VkResult, error) {
+	a.logger.Debug("Allocator::FindMemoryTypeIndexForBufferInfo")
+
+	// TODO: Vulkan 1.3
+
+	memReqs, res, err := a.getBufferMemoryRequirements(bufferInfo)
+	if err != nil {
+		return -1, res, err
+	}
+
+	usage := uint32(bufferInfo.Usage)
+	return a.findMemoryTypeIndex(memReqs.MemoryTypeBits, &o, &usage)
+}
+
+func (a *Allocator) FindMemoryTypeIndexForImageInfo(
+	imageInfo core1_0.ImageCreateInfo,
+	o AllocationCreateInfo,
+) (int, common.VkResult, error) {
+	a.logger.Debug("Allocator::FindMemoryTYpeIndexForImageInfo")
+
+	// TODO: Vulkan 1.3
+
+	memReqs, res, err := a.getImageMemoryRequirements(imageInfo)
+	if err != nil {
+		return -1, res, err
+	}
+
+	usage := uint32(imageInfo.Usage)
+	return a.findMemoryTypeIndex(memReqs.MemoryTypeBits, &o, &usage)
+}
+
+func (a *Allocator) getImageMemoryRequirements(
+	imageInfo core1_0.ImageCreateInfo,
+) (*core1_0.MemoryRequirements, common.VkResult, error) {
+	image, res, err := a.device.CreateImage(a.allocationCallbacks, imageInfo)
+	if err != nil {
+		return nil, res, err
+	}
+	defer image.Destroy(a.allocationCallbacks)
+
+	return image.MemoryRequirements(), core1_0.VKSuccess, nil
+}
+
+func (a *Allocator) getBufferMemoryRequirements(
+	bufferInfo core1_0.BufferCreateInfo,
+) (*core1_0.MemoryRequirements, common.VkResult, error) {
+	buffer, res, err := a.device.CreateBuffer(a.allocationCallbacks, bufferInfo)
+	if err != nil {
+		return nil, res, err
+	}
+	defer buffer.Destroy(a.allocationCallbacks)
+
+	return buffer.MemoryRequirements(), core1_0.VKSuccess, nil
+}
+
+func (a *Allocator) findMemoryTypeIndex(
+	memoryTypeBits uint32,
+	o *AllocationCreateInfo,
 	bufferOrImageUsage *uint32,
 ) (int, common.VkResult, error) {
 	memoryTypeBits &= a.globalMemoryTypeBits
@@ -173,11 +245,11 @@ func (a *Allocator) findMemoryTypeIndex(
 
 	requiredFlags, preferredFlags, notPreferredFlags, err := a.findMemoryPreferences(o, bufferOrImageUsage)
 	if err != nil {
-		return 0, core1_0.VKErrorUnknown, err
+		return 0, core1_0.VKErrorFeatureNotPresent, err
 	}
 
 	bestMemoryTypeIndex := -1
-	minCost := 100000
+	minCost := math.MaxInt
 
 	for memTypeIndex := 0; memTypeIndex < a.deviceMemory.MemoryTypeCount(); memTypeIndex++ {
 		memTypeBit := uint32(1 << memTypeIndex)
@@ -188,7 +260,7 @@ func (a *Allocator) findMemoryTypeIndex(
 		}
 
 		flags := a.deviceMemory.MemoryTypeProperties(memTypeIndex).PropertyFlags
-		if requiredFlags & ^flags != 0 {
+		if requiredFlags&flags != requiredFlags {
 			// This memory type is missing required flags
 			continue
 		}
@@ -228,9 +300,9 @@ func (a *Allocator) calculateMemoryTypeParameters(
 		options.Flags&memutils.AllocationCreateWithinBudget != 0 {
 		heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex)
 
-		budget := []vulkan.Budget{{}}
-		a.deviceMemory.HeapBudgets(heapIndex, budget)
-		if budget[0].Usage+size*allocationCount > budget[0].Budget {
+		budget := vulkan.Budget{}
+		a.deviceMemory.HeapBudget(heapIndex, &budget)
+		if budget.Usage+size*allocationCount > budget.Budget {
 			return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
 		}
 	}
@@ -250,27 +322,26 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 ) (res common.VkResult, err error) {
 	mem, res, err := a.deviceMemory.AllocateVulkanMemory(allocInfo)
 	if err != nil {
+		a.logger.Debug("    Allocator::allocateDedicatedMemoryPage FAILED")
 		return res, err
 	}
 	defer func() {
 		if err != nil {
+			a.logger.Debug("    Allocator::allocateDedicatedMemoryPage FAILED")
 			a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, size, mem)
 		}
 	}()
 
-	var mappedPtr unsafe.Pointer
 	if doMap {
-		mappedPtr, res, err = mem.Map(1, 0, -1, 0)
+		// Set up our persistent map
+		_, res, err = mem.Map(1, 0, -1, 0)
 		if err != nil {
 			return res, err
 		}
 	}
 
 	alloc.init(a.deviceMemory, isMappingAllowed)
-	err = alloc.initDedicatedAllocation(pool, memoryTypeIndex, mem, suballocationType, mappedPtr, size)
-	if err != nil {
-		return core1_0.VKErrorUnknown, err
-	}
+	alloc.initDedicatedAllocation(pool, memoryTypeIndex, mem, suballocationType, size)
 
 	userDataStr, ok := userData.(string)
 	if ok {
@@ -278,12 +349,10 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 	} else {
 		alloc.SetUserData(userData)
 	}
+	a.deviceMemory.AddAllocation(a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex), size)
 
 	if memutils.DebugMargin > 0 {
-		res, err = alloc.fillAllocation(memutils.CreatedFillPattern)
-		if err != nil {
-			return res, err
-		}
+		alloc.fillAllocation(memutils.CreatedFillPattern)
 	}
 
 	return core1_0.VKSuccess, nil
@@ -304,11 +373,11 @@ func (a *Allocator) allocateDedicatedMemory(
 	allocations []Allocation,
 	options common.Options,
 ) (common.VkResult, error) {
-	if allocations == nil || len(allocations) == 0 {
-		return core1_0.VKErrorUnknown, errors.New("attempted to make allocations to an empty list")
+	if len(allocations) == 0 {
+		panic("called Allocator::allocateDedicatedMemory with empty allocation list")
 	}
 	if dedicatedBuffer != nil && dedicatedImage != nil {
-		return core1_0.VKErrorUnknown, errors.New("both buffer and image were passed in- only one is permitted")
+		panic("called Allocator::allocateDedicatedMemory with both dedicatedBuffer and dedicatedImage - only one is permitted")
 	}
 
 	allocInfo := core1_0.MemoryAllocateInfo{
@@ -353,8 +422,11 @@ func (a *Allocator) allocateDedicatedMemory(
 		exportMemoryAllocInfo := khr_external_memory.ExportMemoryAllocateInfo{
 			HandleTypes: a.deviceMemory.ExternalMemoryTypes(memoryTypeIndex),
 		}
-		exportMemoryAllocInfo.Next = allocInfo.Next
-		allocInfo.Next = exportMemoryAllocInfo
+
+		if exportMemoryAllocInfo.HandleTypes != 0 {
+			exportMemoryAllocInfo.Next = allocInfo.Next
+			allocInfo.Next = exportMemoryAllocInfo
+		}
 	}
 
 	var res common.VkResult
@@ -379,16 +451,12 @@ func (a *Allocator) allocateDedicatedMemory(
 
 	if err == nil {
 		for registerIndex := 0; registerIndex < len(allocations); registerIndex++ {
-			err = dedicatedAllocations.Register(&allocations[registerIndex])
-			if err != nil {
-				res = core1_0.VKErrorUnknown
-				break
-			}
+			dedicatedAllocations.Register(&allocations[registerIndex])
 		}
 
-		if err == nil {
-			return core1_0.VKSuccess, nil
-		}
+		a.logger.Debug("    Allocated DedicatedMemory", slog.Int("Count", len(allocations)), slog.Int("MemoryTypeIndex", memoryTypeIndex))
+
+		return core1_0.VKSuccess, nil
 	}
 
 	// Clean up allocations after error
@@ -397,6 +465,7 @@ func (a *Allocator) allocateDedicatedMemory(
 
 		currentAlloc := allocations[allocIndex]
 		a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, currentAlloc.Size(), currentAlloc.memory)
+		a.deviceMemory.RemoveAllocation(a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex), currentAlloc.Size())
 	}
 
 	return res, err
@@ -418,12 +487,17 @@ func (a *Allocator) allocateMemoryOfType(
 	allocations []Allocation,
 ) (common.VkResult, error) {
 	if len(allocations) == 0 {
-		return core1_0.VKErrorUnknown, errors.New("attempted to make allocations to an empty list")
+		panic("allocateMemoryOfType called with an empty list of target allocations")
+	}
+	if createInfo == nil {
+		panic("allocateMemoryOfType called with a nil createInfo")
 	}
 
-	finalCreateInfo := createInfo
+	a.logger.Debug("Allocator::allocateMemoryOfType", slog.Int("MemoryTypeIndex", memoryTypeIndex), slog.Int("AllocationCount", len(allocations)), slog.Int("Size", size))
 
-	res, err := a.calculateMemoryTypeParameters(finalCreateInfo, memoryTypeIndex, size, len(allocations))
+	finalCreateInfo := *createInfo
+
+	res, err := a.calculateMemoryTypeParameters(&finalCreateInfo, memoryTypeIndex, size, len(allocations))
 	if err != nil {
 		return res, err
 	}
@@ -484,6 +558,7 @@ func (a *Allocator) allocateMemoryOfType(
 				blockAllocations.allocOptions,
 			)
 			if err == nil {
+				a.logger.Debug("  Allocated as DedicatedMemory")
 				return res, err
 			}
 		}
@@ -492,7 +567,7 @@ func (a *Allocator) allocateMemoryOfType(
 	res, err = blockAllocations.Allocate(
 		size,
 		alignment,
-		finalCreateInfo,
+		&finalCreateInfo,
 		suballocationType,
 		allocations,
 	)
@@ -520,15 +595,17 @@ func (a *Allocator) allocateMemoryOfType(
 			blockAllocations.allocOptions,
 		)
 		if err == nil {
+			a.logger.Debug("  Allocated as DedicatedMemory")
 			return res, err
 		}
 	}
 
+	a.logger.Debug("  AllocateMemory FAILED")
 	return res, err
 }
 
 func (a *Allocator) multiAllocateMemory(
-	memoryRequirements core1_0.MemoryRequirements,
+	memoryRequirements *core1_0.MemoryRequirements,
 	requiresDedicatedAllocation bool,
 	prefersDedicatedAllocation bool,
 	dedicatedBuffer core1_0.Buffer,
@@ -544,7 +621,7 @@ func (a *Allocator) multiAllocateMemory(
 	}
 
 	if memoryRequirements.Size < 1 {
-		return core1_0.VKErrorInitializationFailed, core1_0.VKErrorInitializationFailed.ToError()
+		return core1_0.VKErrorUnknown, errors.New("provided memory requirement size was not a positive integer")
 	}
 
 	res, err := a.calcAllocationParams(options, requiresDedicatedAllocation)
@@ -571,7 +648,7 @@ func (a *Allocator) multiAllocateMemory(
 	}
 
 	memoryBits := memoryRequirements.MemoryTypeBits
-	memoryTypeIndex, res, err := a.findMemoryTypeIndex(memoryBits, *options, dedicatedBufferOrImageUsage)
+	memoryTypeIndex, res, err := a.findMemoryTypeIndex(memoryBits, options, dedicatedBufferOrImageUsage)
 	if err != nil {
 		return res, err
 	}
@@ -606,19 +683,22 @@ func (a *Allocator) multiAllocateMemory(
 		// Remove memory type index from possibilities
 		memoryBits &= ^(1 << memoryTypeIndex)
 		// Find a new memorytypeindex
-		memoryTypeIndex, res, err = a.findMemoryTypeIndex(memoryBits, *options, dedicatedBufferOrImageUsage)
+		memoryTypeIndex, res, err = a.findMemoryTypeIndex(memoryBits, options, dedicatedBufferOrImageUsage)
 	}
 
 	return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
 }
 
-func (a *Allocator) AllocateMemory(memoryRequirements core1_0.MemoryRequirements, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
+func (a *Allocator) AllocateMemory(memoryRequirements *core1_0.MemoryRequirements, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
+	a.logger.Debug("Allocator::AllocateMemory")
+
 	if outAlloc == nil {
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil allocation")
+	} else if memoryRequirements == nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to allocate with nil memory requirements")
 	}
 
-	a.logger.Debug("AllocateMemory")
-
+	// Attempt to create a one-length slice for the provided alloc pointer
 	outAllocSlice := unsafe.Slice(outAlloc, 1)
 	res, err := a.multiAllocateMemory(
 		memoryRequirements,
@@ -645,21 +725,169 @@ func (a *Allocator) freeDedicatedMemory(alloc *Allocation) error {
 	parentPool := alloc.dedicatedData.parentPool
 	if parentPool == nil {
 		// Default pool
-		err := a.dedicatedAllocations[memoryTypeIndex].Unregister(alloc)
-		if err != nil {
-			return err
-		}
+		a.dedicatedAllocations[memoryTypeIndex].Unregister(alloc)
 	} else {
 		// Custom pool
-		err := parentPool.dedicatedAllocations.Unregister(alloc)
-		if err != nil {
-			return err
-		}
+		parentPool.dedicatedAllocations.Unregister(alloc)
 	}
 
 	a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, alloc.Size(), alloc.memory)
 
 	a.deviceMemory.RemoveAllocation(heapIndex, alloc.Size())
-	// TODO: Free allocation object?
+
 	return nil
+}
+
+func (a *Allocator) CheckCorruption(memoryTypeBits uint32) (common.VkResult, error) {
+	a.logger.Debug("Allocator::CheckCorruption")
+
+	res := core1_0.VKErrorFeatureNotPresent
+
+	// Process default pools
+	for memoryTypeIndex := 0; memoryTypeIndex < a.deviceMemory.MemoryTypeCount(); memoryTypeIndex++ {
+		list := a.memoryBlockLists[memoryTypeIndex]
+		if list != nil {
+			innerRes, err := list.CheckCorruption()
+			switch innerRes {
+			case core1_0.VKErrorFeatureNotPresent:
+				break
+			case core1_0.VKSuccess:
+				res = core1_0.VKSuccess
+				break
+			default:
+				if err != nil {
+					return res, err
+				}
+			}
+		}
+	}
+
+	// Process custom pools
+	poolRes, err := a.checkCustomPools(memoryTypeBits)
+	if poolRes == core1_0.VKErrorFeatureNotPresent {
+		return res, res.ToError()
+	}
+
+	return poolRes, err
+}
+
+func (a *Allocator) checkCustomPools(memoryTypeBits uint32) (common.VkResult, error) {
+	a.poolsMutex.RLock()
+	defer a.poolsMutex.RUnlock()
+
+	res := core1_0.VKErrorFeatureNotPresent
+	for pool := a.pools; pool != nil; pool = pool.next {
+		memBit := 1 << pool.blockList.memoryTypeIndex
+		if memBit&memoryTypeBits == 0 {
+			continue
+		}
+
+		innerRes, err := pool.blockList.CheckCorruption()
+		switch innerRes {
+		case core1_0.VKErrorFeatureNotPresent:
+			break
+		case core1_0.VKSuccess:
+			res = core1_0.VKSuccess
+			break
+		default:
+			if err != nil {
+				return res, err
+			}
+		}
+	}
+
+	return res, res.ToError()
+}
+
+func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResult, error) {
+
+	a.logger.Debug("Allocator::CreatePool",
+		slog.Int("MemoryTypeIndex", createInfo.MemoryTypeIndex),
+		slog.String("Flags", createInfo.Flags.String()),
+	)
+
+	if createInfo.MaxBlockCount == 0 {
+		createInfo.MaxBlockCount = math.MaxInt
+	}
+	if createInfo.MinBlockCount > createInfo.MaxBlockCount {
+		return nil, core1_0.VKErrorUnknown, errors.Newf("provided MinBlockCount %d was greater than provided MaxBlockCount %d", createInfo.MinBlockCount, createInfo.MaxBlockCount)
+	}
+
+	memTypeBits := 1 << createInfo.MemoryTypeIndex
+	if createInfo.MemoryTypeIndex >= a.deviceMemory.MemoryTypeCount() || memTypeBits&a.globalMemoryTypeBits == 0 {
+		return nil, core1_0.VKErrorFeatureNotPresent, core1_0.VKErrorFeatureNotPresent.ToError()
+	}
+
+	if createInfo.MinAllocationAlignment > 0 {
+		err := memutils.CheckPow2(createInfo.MinAllocationAlignment, "createInfo.MinAllocationAlignment")
+		if err != nil {
+			return nil, core1_0.VKErrorUnknown, err
+		}
+	}
+
+	preferredBlockSize, err := a.calculatePreferredBlockSize(createInfo.MemoryTypeIndex)
+	if err != nil {
+		return nil, core1_0.VKErrorUnknown, err
+	}
+
+	pool := &Pool{
+		logger: a.logger,
+	}
+	blockSize := preferredBlockSize
+	if createInfo.BlockSize != 0 {
+		blockSize = createInfo.BlockSize
+	}
+	bufferImageGranularity := 1
+	if createInfo.Flags&PoolCreateIgnoreBufferImageGranularity == 0 {
+		bufferImageGranularity = a.deviceMemory.CalculateBufferImageGranularity()
+	}
+
+	alignment := a.deviceMemory.MemoryTypeMinimumAlignment(createInfo.MemoryTypeIndex)
+	if createInfo.MinAllocationAlignment > alignment {
+		alignment = createInfo.MinAllocationAlignment
+	}
+
+	pool.blockList.Init(
+		a.useMutex,
+		a.logger,
+		createInfo.MemoryTypeIndex,
+		blockSize,
+		createInfo.MinBlockCount,
+		createInfo.MaxBlockCount,
+		bufferImageGranularity,
+		createInfo.BlockSize != 0,
+		createInfo.Flags&PoolCreateAlgorithmMask,
+		createInfo.Priority,
+		alignment,
+		a.extensionData,
+		a.deviceMemory,
+		createInfo.MemoryAllocateNext,
+	)
+
+	res, err := pool.blockList.CreateMinBlocks()
+	if err != nil {
+		destroyErr := pool.Destroy()
+		if err != nil {
+			a.logger.Error("error attempting to destroy pool after creation failure", slog.Any("error", destroyErr))
+		}
+		return nil, res, err
+	}
+
+	a.poolsMutex.Lock()
+	defer a.poolsMutex.Unlock()
+
+	err = pool.SetID(a.nextPoolId)
+	if err != nil {
+		destroyErr := pool.destroyAfterLock()
+		if destroyErr != nil {
+			a.logger.Error("error attempting to destroy pool after failing to set id", slog.Any("error", destroyErr))
+		}
+
+		return nil, core1_0.VKErrorUnknown, err
+	}
+	pool.next = a.pools
+	a.pools.prev = pool
+	a.pools = pool
+
+	return pool, core1_0.VKSuccess, nil
 }

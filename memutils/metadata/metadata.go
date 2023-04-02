@@ -11,6 +11,7 @@ import (
 
 type BlockMetadata interface {
 	Init(size int)
+	Destroy()
 	IsVirtual() bool
 	Size() int
 

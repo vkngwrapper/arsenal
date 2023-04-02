@@ -294,20 +294,16 @@ func (m *DeviceMemoryProperties) ExternalMemoryTypes(memoryTypeIndex int) khr_ex
 	return m.externalMemoryHandleTypes[memoryTypeIndex]
 }
 
-func (m *DeviceMemoryProperties) HeapBudgets(firstHeap int, budgets []Budget) {
+func (m *DeviceMemoryProperties) HeapBudget(heapIndex int, budget *Budget) {
 	// TODO: Memory budget extension
 
-	for i := 0; i < len(budgets); i++ {
-		heapIndex := firstHeap + i
+	budget.Statistics.BlockCount = int(m.blockCount[heapIndex])
+	budget.Statistics.AllocationCount = int(m.allocationCount[heapIndex])
+	budget.Statistics.BlockBytes = int(m.blockBytes[heapIndex])
+	budget.Statistics.AllocationBytes = int(m.allocationBytes[heapIndex])
 
-		budgets[i].Statistics.BlockCount = int(m.blockCount[heapIndex])
-		budgets[i].Statistics.AllocationCount = int(m.allocationCount[heapIndex])
-		budgets[i].Statistics.BlockBytes = int(m.blockBytes[heapIndex])
-		budgets[i].Statistics.AllocationBytes = int(m.allocationBytes[heapIndex])
-
-		budgets[i].Usage = budgets[heapIndex].Statistics.BlockBytes
-		budgets[i].Budget = m.memoryProperties.MemoryHeaps[heapIndex].Size * 8 / 10
-	}
+	budget.Usage = budget.Statistics.BlockBytes
+	budget.Budget = m.memoryProperties.MemoryHeaps[heapIndex].Size * 8 / 10
 }
 
 type CacheOperation uint32

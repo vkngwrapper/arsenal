@@ -149,6 +149,19 @@ func (l *memoryBlockList) IsEmpty() bool {
 	return len(l.blocks) == 0
 }
 
+func (l *memoryBlockList) HasNoAllocations() bool {
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+
+	for blockIndex := 0; blockIndex < len(l.blocks); blockIndex++ {
+		if !l.IsEmpty() {
+			return false
+		}
+	}
+
+	return true
+}
+
 func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, error) {
 	// First build MemoryAllocateInfo with all the relevant extensions
 	var allocInfo core1_0.MemoryAllocateInfo
@@ -194,15 +207,15 @@ func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, erro
 	return len(l.blocks) - 1, res, nil
 }
 
-func (l *memoryBlockList) Remove(block *deviceMemoryBlock) error {
+func (l *memoryBlockList) Remove(block *deviceMemoryBlock) {
 	for blockIndex := 0; blockIndex < len(l.blocks); blockIndex++ {
 		if l.blocks[blockIndex] == block {
 			l.blocks = append(l.blocks[0:blockIndex], l.blocks[blockIndex+1:]...)
-			return nil
+			return
 		}
 	}
 
-	return errors.New("attempted to remove a block from a block list that did not belong to it")
+	panic("attempted to remove a block from a block list that did not belong to it")
 }
 
 func (l *memoryBlockList) IsCorruptionDetectionEnabled() bool {
@@ -228,8 +241,11 @@ func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *Allocat
 		if err != nil {
 			for allocIndex > 0 {
 				allocIndex--
-				// TODO: Log errors
-				_ = l.Free(&allocations[allocIndex])
+
+				freeErr := l.Free(&allocations[allocIndex])
+				if freeErr != nil {
+					panic(fmt.Sprintf("unexpected error when freeing an allocation that was created as part of a failed allocation: %+v", err))
+				}
 			}
 		}
 	}()
@@ -282,14 +298,12 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 
 	heapIndex := l.deviceMemory.MemoryTypeIndexToHeapIndex(l.memoryTypeIndex)
 
-	budget := []vulkan.Budget{
-		{},
-	}
-	l.deviceMemory.HeapBudgets(heapIndex, budget)
-	var freeMemory int
+	budget := vulkan.Budget{}
+	l.deviceMemory.HeapBudget(heapIndex, &budget)
+	freeMemory := budget.Budget - budget.Usage
 
-	if budget[0].Usage < budget[0].Budget {
-		freeMemory = budget[0].Budget - budget[0].Usage
+	if freeMemory < 0 {
+		freeMemory = 0
 	}
 
 	canFallbackToDedicated := !l.HasExplicitBlockSize() &&
@@ -304,7 +318,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 		return core1_0.VKErrorFeatureNotPresent, core1_0.VKErrorFeatureNotPresent.ToError()
 	}
 
-	// Early reject: requested allocation size is alrger than maximum block size for this block list
+	// Early reject: requested allocation size is larger than maximum block size for this block list
 	if size+memutils.DebugMargin > l.preferredBlockSize {
 		return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
 	}
@@ -312,19 +326,20 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 	// 1. Search existing allocations & try to do an allocation
 	if l.algorithm == PoolCreateLinearAlgorithm {
 		// Only use the last block in linear
-		if len(l.blocks) != 0 {
+		if len(l.blocks) > 0 {
 			currentBlock := l.blocks[len(l.blocks)-1]
 			if currentBlock == nil {
-				return core1_0.VKErrorUnknown, errors.New("a nil block was found in this block list")
+				panic("a nil block was found in this block list")
 			}
 
 			res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 			if err == nil {
+				l.logger.Debug("    Returned from last block", slog.Int("block.id", currentBlock.id))
 				l.incrementallySortBlocks()
+				return res, nil
+			} else if res == core1_0.VKErrorUnknown {
+				return res, err
 			}
-
-			return res, err
-
 		}
 	} else if strategy != memutils.AllocationCreateStrategyMinTime {
 		// Iterate forward through the blocks to find the smallest/best block where this will fit
@@ -340,20 +355,23 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 				mappable and non-mappable allocations, hopefully limiting the number of mapped blocks
 			*/
 			for mappingIndex := 0; mappingIndex < 2; mappingIndex++ {
+				// Prefer blocks with the smallest amount of free space by iterating forward
 				for blockIndex := 0; blockIndex < len(l.blocks); blockIndex++ {
 					currentBlock := l.blocks[blockIndex]
 					if currentBlock == nil {
-						return core1_0.VKErrorUnknown, errors.Newf("a memory block at index %d is unexpectedly nil", blockIndex)
+						panic(fmt.Sprintf("a memory block at index %d is unexpectedly nil", blockIndex))
 					}
 
 					isBlockMapped := currentBlock.memory.MappedData() != nil
 					if (mappingIndex == 0) == (isMappingAllowed == isBlockMapped) {
 						res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 						if err == nil {
+							l.logger.Debug("    Returned from existing block", slog.Int("block.id", currentBlock.id))
 							l.incrementallySortBlocks()
+							return res, nil
+						} else if res == core1_0.VKErrorUnknown {
+							return res, err
 						}
-
-						return res, err
 					}
 				}
 			}
@@ -361,33 +379,38 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 			// Not host-visible
 
 			for blockIndex := 0; blockIndex < len(l.blocks); blockIndex++ {
+				// Prefer blocks with the smallest amount of free space by iterating forward
 				currentBlock := l.blocks[blockIndex]
 				if currentBlock == nil {
-					return core1_0.VKErrorUnknown, errors.Newf("a memory block at index %d is unexpectedly nil", blockIndex)
+					panic(fmt.Sprintf("a memory block at index %d is unexpectedly nil", blockIndex))
 				}
 
 				res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 				if err == nil {
+					l.logger.Debug("   Returned from existing block", slog.Int("block.id", currentBlock.id))
 					l.incrementallySortBlocks()
+					return res, nil
+				} else if res == core1_0.VKErrorUnknown {
+					return res, err
 				}
-
-				return res, err
 			}
 		}
 	} else {
-		// Iterate backward through the blocks to try and find the fit as fast as possible
 		for blockIndex := len(l.blocks) - 1; blockIndex >= 0; blockIndex-- {
+			// Prefer blocks with the largest amount of free space by iterating backward
 			currentBlock := l.blocks[blockIndex]
 			if currentBlock == nil {
-				return core1_0.VKErrorUnknown, errors.Newf("a memory block at index %d is unexpectedly nil", blockIndex)
+				panic(fmt.Sprintf("a memory block at index %d is unexpectedly nil", blockIndex))
 			}
 
 			res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 			if err == nil {
+				l.logger.Debug("    Returned from existing block", slog.Int("block.id", currentBlock.id))
 				l.incrementallySortBlocks()
+				return res, nil
+			} else if res == core1_0.VKErrorUnknown {
+				return res, err
 			}
-
-			return res, err
 		}
 	}
 
@@ -420,10 +443,10 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 			for err != nil && newBlockSizeShift < MaxNewBlockSizeShift {
 				smallerNewBlockSize := newBlockSize / 2
 				if smallerNewBlockSize >= size {
-					newBlockSizeShift = smallerNewBlockSize
+					newBlockSize = smallerNewBlockSize
 					newBlockSizeShift++
-					if newBlockSize < freeMemory || !canFallbackToDedicated {
-						newBlockIndex, _, err = l.CreateBlock(newBlockSizeShift)
+					if newBlockSize <= freeMemory || !canFallbackToDedicated {
+						newBlockIndex, _, err = l.CreateBlock(newBlockSize)
 					}
 				} else {
 					break
@@ -434,20 +457,17 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 		if err == nil {
 			block := l.blocks[newBlockIndex]
 			if block.metadata.Size() < size {
-				return core1_0.VKErrorUnknown, errors.Newf("attempted to allocate block %d but somehow ended up with less memory than we requested (wanted %d got %d)",
-					newBlockIndex,
-					size,
-					block.metadata.Size())
+				panic(fmt.Sprintf("created a new block at index %d to hold an allocation of size %d but the created block was somehow only size %d", newBlockIndex, size, block.metadata.Size()))
 			}
 
 			res, err = l.allocFromBlock(block, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
-			if err != nil {
-				// Failing to allocate from a new block is always bad
+			if err == nil {
+				l.logger.Debug("    Created new block", slog.Int("block.id", block.id), slog.Int("block.size", newBlockSize))
+				l.incrementallySortBlocks()
+				return res, nil
+			} else if res == core1_0.VKErrorUnknown {
 				return res, err
 			}
-
-			l.incrementallySortBlocks()
-			return res, err
 		}
 	}
 
@@ -464,7 +484,7 @@ func (l *memoryBlockList) Free(alloc *Allocation) error {
 	if blockToDelete != nil {
 		err = blockToDelete.Destroy()
 		if err != nil {
-			return err
+			panic(fmt.Sprintf("unexpected failure when destroying a memory block in response to freeing an allocation: %+v", err))
 		}
 		l.blockPool.Put(blockToDelete)
 	}
@@ -479,23 +499,19 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 
 	block := alloc.blockData.block
 
-	heapBudget := []vulkan.Budget{{}}
-	l.deviceMemory.HeapBudgets(heapIndex, heapBudget)
-	budgetExceeded := heapBudget[0].Usage >= heapBudget[0].Budget
+	heapBudget := vulkan.Budget{}
+	l.deviceMemory.HeapBudget(heapIndex, &heapBudget)
+	budgetExceeded := heapBudget.Usage >= heapBudget.Budget
 
-	if memutils.DebugMargin > 0 {
-		offset, err := alloc.FindOffset()
+	if l.IsCorruptionDetectionEnabled() {
+		_, err = block.ValidateMagicValueAfterAllocation(alloc.FindOffset(), alloc.size)
 		if err != nil {
-			return nil, err
-		}
-
-		_, err = block.ValidateMagicValueAfterAllocation(offset, alloc.size)
-		if err != nil {
-			return nil, err
+			panic(fmt.Sprintf("unexpected error while validating magic values: %+v", err))
 		}
 	}
 
 	if alloc.isPersistentMap() {
+		// Unmap might fail if the user has screwed up Map/Unmap pairs, we want to return error in that case
 		err := block.memory.Unmap(1)
 		if err != nil {
 			return nil, err
@@ -505,7 +521,7 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 	hasEmptyBlockBeforeFree := l.hasEmptyBlock()
 	err = block.metadata.Free(alloc.blockData.handle)
 	if err != nil {
-		return nil, err
+		panic(fmt.Sprintf("unexpected error when freeing allocation with handle %+v in metadata: %+v", alloc.blockData.handle, err))
 	}
 
 	block.memory.RecordSuballocSubfree()
@@ -515,10 +531,7 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 	// The block is empty & we can delete it
 	if block.metadata.IsEmpty() && (hasEmptyBlockBeforeFree || budgetExceeded) && canDeleteBlock {
 		blockToDelete = block
-		err = l.Remove(block)
-		if err != nil {
-			return nil, err
-		}
+		l.Remove(block)
 	} else if !block.metadata.IsEmpty() && hasEmptyBlockBeforeFree && canDeleteBlock {
 		// There is an empty block somewhere we don't need
 		lastBlock := l.blocks[len(l.blocks)-1]
@@ -530,7 +543,7 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 
 	l.incrementallySortBlocks()
 
-	return blockToDelete, err
+	return blockToDelete, nil
 }
 
 func (l *memoryBlockList) hasEmptyBlock() bool {
@@ -606,24 +619,14 @@ func (l *memoryBlockList) commitAllocationRequest(allocRequest *metadata.Allocat
 		return core1_0.VKErrorUnknown, err
 	}
 
-	err = outAlloc.initBlockAllocation(block, allocRequest.BlockAllocationHandle, alignment, allocRequest.Size, l.memoryTypeIndex, suballocType, mapped)
-	if err != nil {
-		return core1_0.VKErrorUnknown, err
-	}
+	outAlloc.initBlockAllocation(block, allocRequest.BlockAllocationHandle, alignment, allocRequest.Size, l.memoryTypeIndex, suballocType, mapped)
 	outAlloc.SetUserData(userData)
 	heapIndex := l.deviceMemory.MemoryTypeIndexToHeapIndex(l.memoryTypeIndex)
 	l.deviceMemory.AddAllocation(heapIndex, allocRequest.Size)
 
 	if memutils.DebugMargin > 0 {
-		res, err := outAlloc.fillAllocation(memutils.CreatedFillPattern)
-		if err != nil {
-			return res, err
-		}
-		offset, err := outAlloc.FindOffset()
-		if err != nil {
-			return core1_0.VKErrorUnknown, err
-		}
-		res, err = block.WriteMagicBlockAfterAllocation(offset, allocRequest.Size)
+		outAlloc.fillAllocation(memutils.CreatedFillPattern)
+		res, err := block.WriteMagicBlockAfterAllocation(outAlloc.FindOffset(), allocRequest.Size)
 		if err != nil {
 			return res, err
 		}
@@ -689,4 +692,27 @@ func (l *memoryBlockList) printDetailedMapAllocations(md metadata.BlockMetadata,
 			}
 		})
 
+}
+
+func (l *memoryBlockList) CheckCorruption() (common.VkResult, error) {
+	if !l.IsCorruptionDetectionEnabled() {
+		return core1_0.VKErrorFeatureNotPresent, core1_0.VKErrorFeatureNotPresent.ToError()
+	}
+
+	l.mutex.RLock()
+	defer l.mutex.RUnlock()
+
+	for blockIndex := 0; blockIndex < len(l.blocks); blockIndex++ {
+		block := l.blocks[blockIndex]
+		if block == nil {
+			return core1_0.VKErrorUnknown, errors.Newf("unexpected nil block at memory type %d, block %d", l.memoryTypeIndex, blockIndex)
+		}
+
+		res, err := block.CheckCorruption()
+		if err != nil {
+			return res, err
+		}
+	}
+
+	return core1_0.VKSuccess, nil
 }

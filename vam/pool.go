@@ -3,6 +3,7 @@ package vam
 import (
 	"github.com/cockroachdb/errors"
 	"github.com/vkngwrapper/core/v2/common"
+	"golang.org/x/exp/slog"
 )
 
 type PoolCreateInfo struct {
@@ -19,8 +20,10 @@ type PoolCreateInfo struct {
 }
 
 type Pool struct {
+	logger               *slog.Logger
 	blockList            memoryBlockList
 	dedicatedAllocations dedicatedAllocationList
+	parentAllocator      *Allocator
 
 	id   int
 	name string
@@ -28,43 +31,9 @@ type Pool struct {
 	next *Pool
 }
 
-func NewPool(allocator *Allocator, createInfo PoolCreateInfo, preferredBlockSize int) *Pool {
-	pool := &Pool{}
-	blockSize := preferredBlockSize
-	if createInfo.BlockSize != 0 {
-		blockSize = createInfo.BlockSize
-	}
-	bufferImageGranularity := 1
-	if createInfo.Flags&PoolCreateIgnoreBufferImageGranularity == 0 {
-		bufferImageGranularity = allocator.deviceMemory.CalculateBufferImageGranularity()
-	}
-
-	alignment := allocator.deviceMemory.MemoryTypeMinimumAlignment(createInfo.MemoryTypeIndex)
-	if createInfo.MinAllocationAlignment > alignment {
-		alignment = createInfo.MinAllocationAlignment
-	}
-
-	pool.blockList.Init(
-		allocator.useMutex,
-		allocator.logger,
-		createInfo.MemoryTypeIndex,
-		blockSize,
-		createInfo.MinBlockCount,
-		createInfo.MaxBlockCount,
-		bufferImageGranularity,
-		createInfo.BlockSize != 0,
-		createInfo.Flags&PoolCreateAlgorithmMask,
-		createInfo.Priority,
-		alignment,
-		allocator.extensionData,
-		allocator.deviceMemory,
-		createInfo.MemoryAllocateNext,
-	)
-
-	return pool
-}
-
 func (p *Pool) SetName(name string) {
+	p.logger.Debug("Pool::SetName")
+
 	p.name = name
 }
 
@@ -76,10 +45,51 @@ func (p *Pool) SetID(id int) error {
 	return nil
 }
 
+func (p *Pool) Destroy() error {
+	p.logger.Debug("Pool::Destroy")
+
+	p.parentAllocator.poolsMutex.Lock()
+	defer p.parentAllocator.poolsMutex.Unlock()
+
+	return p.destroyAfterLock()
+}
+
+func (p *Pool) destroyAfterLock() error {
+	if p.dedicatedAllocations.count > 0 {
+		return errors.Newf("the pool still has %d dedicated allocations that remain unfreed", p.dedicatedAllocations.count)
+	}
+
+	err := p.blockList.Destroy()
+	if err != nil {
+		return err
+	}
+
+	next := p.next
+	if p.next != nil {
+		p.next.prev = p.prev
+	}
+	if p.prev != nil {
+		p.prev.next = next
+	}
+
+	if p.parentAllocator.pools == p {
+		p.parentAllocator.pools = next
+	}
+
+	return nil
+}
+
+func (p *Pool) CheckCorruption() (common.VkResult, error) {
+	p.logger.Debug("Pool::CheckCorruption")
+	return p.blockList.CheckCorruption()
+}
+
 func (p *Pool) ID() int {
 	return p.id
 }
 
 func (p *Pool) Name() string {
+	p.logger.Debug("Pool::Name")
+
 	return p.name
 }
