@@ -197,10 +197,7 @@ func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, erro
 	// Build allocation
 	block := l.blockPool.Get().(*deviceMemoryBlock)
 
-	err = block.Init(l.logger, l.deviceMemory, l.memoryTypeIndex, memory, allocInfo.AllocationSize, l.nextBlockId, l.algorithm, l.bufferImageGranularity)
-	if err != nil {
-		return -1, core1_0.VKErrorUnknown, err
-	}
+	block.Init(l.logger, l.deviceMemory, l.memoryTypeIndex, memory, allocInfo.AllocationSize, l.nextBlockId, l.algorithm, l.bufferImageGranularity)
 	l.nextBlockId++
 
 	l.blocks = append(l.blocks, block)
@@ -565,6 +562,7 @@ func (l *memoryBlockList) incrementallySortBlocks() {
 	for blockIndex := 1; blockIndex < len(l.blocks); blockIndex++ {
 		if l.blocks[blockIndex-1].metadata.SumFreeSize() > l.blocks[blockIndex].metadata.SumFreeSize() {
 			l.blocks[blockIndex-1], l.blocks[blockIndex] = l.blocks[blockIndex], l.blocks[blockIndex-1]
+			return
 		}
 	}
 }
@@ -573,12 +571,13 @@ func (l *memoryBlockList) calcMaxBlockSize() int {
 	result := 0
 	for blockIndex := len(l.blocks) - 1; blockIndex >= 0; blockIndex-- {
 		blockSize := l.blocks[blockIndex].metadata.Size()
-		if blockSize > result {
-			result = blockSize
+		if blockSize <= result {
+			continue
+		}
 
-			if result >= l.preferredBlockSize {
-				return result
-			}
+		result = blockSize
+		if result >= l.preferredBlockSize {
+			return result
 		}
 	}
 
@@ -626,9 +625,12 @@ func (l *memoryBlockList) commitAllocationRequest(allocRequest *metadata.Allocat
 
 	if memutils.DebugMargin > 0 {
 		outAlloc.fillAllocation(memutils.CreatedFillPattern)
-		res, err := block.WriteMagicBlockAfterAllocation(outAlloc.FindOffset(), allocRequest.Size)
+	}
+
+	if l.IsCorruptionDetectionEnabled() {
+		_, err = block.WriteMagicBlockAfterAllocation(outAlloc.FindOffset(), allocRequest.Size)
 		if err != nil {
-			return res, err
+			panic(fmt.Sprintf("failed to write magic values with unexpected error: %+v", err))
 		}
 	}
 

@@ -31,9 +31,9 @@ func (b *deviceMemoryBlock) Init(
 	id int,
 	algorithm PoolCreateFlags,
 	bufferImageGranularity int,
-) error {
+) {
 	if b.memory != nil {
-		return errors.New("attempting to initialize a device memory block that is already in use")
+		panic("attempting to initialize a device memory block that is already in use")
 	}
 
 	b.memoryTypeIndex = newMemoryTypeIndex
@@ -50,11 +50,10 @@ func (b *deviceMemoryBlock) Init(
 		b.metadata = metadata.NewLinearBlockMetadata(bufferImageGranularity, false)
 		break
 	default:
-		return errors.New("unknown pool algorithm")
+		panic(fmt.Sprintf("unknown pool algorithm: %s", algorithm.String()))
 	}
 
 	b.metadata.Init(newSize)
-	return nil
 }
 
 func (b *deviceMemoryBlock) Destroy() error {

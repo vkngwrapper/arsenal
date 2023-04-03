@@ -31,8 +31,8 @@ func (m SecondVectorMode) String() string {
 	return secondVectorModeMapping[m]
 }
 
-type linearBlockMetadata struct {
-	blockMetadataBase
+type LinearBlockMetadata struct {
+	BlockMetadataBase
 
 	sumFreeSize      int
 	suballocations0  []Suballocation
@@ -48,37 +48,37 @@ type linearBlockMetadata struct {
 	secondNullItemsCount int
 }
 
-func (m *linearBlockMetadata) Destroy() {}
+func (m *LinearBlockMetadata) Destroy() {}
 
-var _ BlockMetadata = &linearBlockMetadata{}
+var _ BlockMetadata = &LinearBlockMetadata{}
 
-func NewLinearBlockMetadata(bufferImageGranularity int, isVirtual bool) *linearBlockMetadata {
-	return &linearBlockMetadata{
-		blockMetadataBase: newBlockMetadata(bufferImageGranularity, isVirtual),
+func NewLinearBlockMetadata(bufferImageGranularity int, isVirtual bool) *LinearBlockMetadata {
+	return &LinearBlockMetadata{
+		BlockMetadataBase: NewBlockMetadata(bufferImageGranularity, isVirtual),
 		secondVectorMode:  SecondVectorModeEmpty,
 		suballocations0:   []Suballocation{},
 		suballocations1:   []Suballocation{},
 	}
 }
 
-func (m *linearBlockMetadata) SumFreeSize() int {
+func (m *LinearBlockMetadata) SumFreeSize() int {
 	return m.sumFreeSize
 }
 
-func (m *linearBlockMetadata) IsEmpty() bool {
+func (m *LinearBlockMetadata) IsEmpty() bool {
 	return m.AllocationCount() == 0
 }
 
-func (m *linearBlockMetadata) AllocationOffset(allocHandle BlockAllocationHandle) (int, error) {
+func (m *LinearBlockMetadata) AllocationOffset(allocHandle BlockAllocationHandle) (int, error) {
 	return int(allocHandle) - 1, nil
 }
 
-func (m *linearBlockMetadata) Init(size int) {
-	m.blockMetadataBase.Init(size)
+func (m *LinearBlockMetadata) Init(size int) {
+	m.BlockMetadataBase.Init(size)
 	m.sumFreeSize = size
 }
 
-func (m *linearBlockMetadata) Validate() error {
+func (m *LinearBlockMetadata) Validate() error {
 	firstVector := *m.accessSuballocationsFirst()
 	secondVector := *m.accessSuballocationsSecond()
 
@@ -113,7 +113,7 @@ func (m *linearBlockMetadata) Validate() error {
 	}
 
 	var sumUsedSize, offset int
-	debugMargin := m.getDebugMargin()
+	debugMargin := m.DebugMargin()
 
 	if m.secondVectorMode == SecondVectorModeRingBuffer {
 		if len(firstVector) == 0 && len(secondVector) != 0 {
@@ -198,19 +198,19 @@ func (m *linearBlockMetadata) Validate() error {
 	return nil
 }
 
-func (m *linearBlockMetadata) AllocationCount() int {
+func (m *LinearBlockMetadata) AllocationCount() int {
 	first := *m.accessSuballocationsFirst()
 	second := *m.accessSuballocationsSecond()
 
 	return len(first) - m.firstNullItemsBeginCount - m.firstNullItemsMiddleCount + len(second) - m.secondNullItemsCount
 }
 
-func (m *linearBlockMetadata) FreeRegionsCount() int {
+func (m *LinearBlockMetadata) FreeRegionsCount() int {
 	// This function is used for defragmentation, which is disabled for this algorithm
 	return math.MaxInt
 }
 
-func (m *linearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool)) {
+func (m *LinearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool)) {
 	size := m.Size()
 	firstVector := *m.accessSuballocationsFirst()
 	secondVector := *m.accessSuballocationsSecond()
@@ -326,7 +326,7 @@ func (m *linearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAlloca
 	}
 }
 
-func (m *linearBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStatistics) {
+func (m *LinearBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStatistics) {
 	stats.Statistics.BlockCount++
 	stats.Statistics.BlockBytes += m.Size()
 
@@ -340,7 +340,7 @@ func (m *linearBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStat
 		})
 }
 
-func (m *linearBlockMetadata) AddStatistics(stats *memutils.Statistics) {
+func (m *LinearBlockMetadata) AddStatistics(stats *memutils.Statistics) {
 
 	size := m.Size()
 	stats.BlockCount++
@@ -355,7 +355,7 @@ func (m *linearBlockMetadata) AddStatistics(stats *memutils.Statistics) {
 		})
 }
 
-func (m *linearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) error {
+func (m *LinearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) error {
 	// first pass
 	size := m.Size()
 	var unusedRangeCount, usedBytes, allocCount int
@@ -371,12 +371,12 @@ func (m *linearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) e
 		})
 
 	unusedBytes := size - usedBytes
-	m.printDetailedMap_Header(json, unusedBytes, allocCount, unusedRangeCount)
+	m.PrintDetailedMap_Header(json, unusedBytes, allocCount, unusedRangeCount)
 
 	return nil
 }
 
-func (m *linearBlockMetadata) PopulateAllocationRequest(
+func (m *LinearBlockMetadata) PopulateAllocationRequest(
 	allocSize int, allocAlignment uint,
 	upperAddress bool,
 	allocType SuballocationType,
@@ -384,13 +384,13 @@ func (m *linearBlockMetadata) PopulateAllocationRequest(
 	allocRequest *AllocationRequest,
 ) (bool, error) {
 	if allocSize <= 0 {
-		panic("allocation size must be greater than 0")
+		return false, errors.New("allocation size must be greater than 0")
 	}
 	if allocType == SuballocationFree {
-		panic("allocation type cannot be SuballocationFree")
+		return false, errors.New("allocation type cannot be SuballocationFree")
 	}
 	if allocRequest == nil {
-		panic("allocation request must be a pointer to a valid struct")
+		return false, errors.New("allocation request must be a pointer to a valid struct")
 	}
 	allocRequest.Size = allocSize
 	if upperAddress {
@@ -400,7 +400,11 @@ func (m *linearBlockMetadata) PopulateAllocationRequest(
 	return m.populateAllocationRequestLower(allocSize, allocAlignment, allocType, allocRequest), nil
 }
 
-func (m *linearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.VkResult, error) {
+func (m *LinearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.VkResult, error) {
+	if m.isVirtual {
+		return core1_0.VKErrorUnknown, errors.New("cannot check corruption on virtual blocks")
+	}
+
 	firstVector := *m.accessSuballocationsFirst()
 
 	for i := m.firstNullItemsBeginCount; i < len(firstVector); i++ {
@@ -421,7 +425,7 @@ func (m *linearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.
 	return core1_0.VKSuccess, nil
 }
 
-func (m *linearBlockMetadata) Alloc(req *AllocationRequest, allocType SuballocationType, userData any) error {
+func (m *LinearBlockMetadata) Alloc(req *AllocationRequest, allocType SuballocationType, userData any) error {
 	offset := int(req.BlockAllocationHandle) - 1
 	newSuballoc := Suballocation{
 		Offset:   offset,
@@ -493,7 +497,7 @@ func (m *linearBlockMetadata) Alloc(req *AllocationRequest, allocType Suballocat
 	return nil
 }
 
-func (m *linearBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
+func (m *LinearBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 	firstVectorPtr := m.accessSuballocationsFirst()
 	firstVector := *firstVectorPtr
 	secondVectorPtr := m.accessSuballocationsSecond()
@@ -572,7 +576,7 @@ func (m *linearBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 	return errors.New("allocation to free not found in this allocator")
 }
 
-func (m *linearBlockMetadata) AllocationUserData(allocHandle BlockAllocationHandle) (any, error) {
+func (m *LinearBlockMetadata) AllocationUserData(allocHandle BlockAllocationHandle) (any, error) {
 	suballoc, err := m.findSuballocation(int(allocHandle) - 1)
 	if err != nil {
 		return nil, err
@@ -580,19 +584,19 @@ func (m *linearBlockMetadata) AllocationUserData(allocHandle BlockAllocationHand
 	return suballoc.UserData, nil
 }
 
-func (m *linearBlockMetadata) AllocationListBegin() (BlockAllocationHandle, error) {
+func (m *LinearBlockMetadata) AllocationListBegin() (BlockAllocationHandle, error) {
 	return 0, errors.New("defragmentation cannot be performed on the linear metadata")
 }
 
-func (m *linearBlockMetadata) FindNextAllocation(allocHandle BlockAllocationHandle) (BlockAllocationHandle, error) {
+func (m *LinearBlockMetadata) FindNextAllocation(allocHandle BlockAllocationHandle) (BlockAllocationHandle, error) {
 	return 0, errors.New("defragmentation cannot be performed on the linear metadata")
 }
 
-func (m *linearBlockMetadata) FindNextFreeRegionSize(allocHandle BlockAllocationHandle) (int, error) {
+func (m *LinearBlockMetadata) FindNextFreeRegionSize(allocHandle BlockAllocationHandle) (int, error) {
 	return 0, errors.New("defragmentation cannot be performed on the linear metadata")
 }
 
-func (m *linearBlockMetadata) Clear() {
+func (m *LinearBlockMetadata) Clear() {
 	m.sumFreeSize = m.size
 	m.suballocations0 = []Suballocation{}
 	m.suballocations1 = []Suballocation{}
@@ -602,7 +606,7 @@ func (m *linearBlockMetadata) Clear() {
 	m.secondNullItemsCount = 0
 }
 
-func (m *linearBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationHandle, userData any) error {
+func (m *LinearBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationHandle, userData any) error {
 	suballoc, err := m.findSuballocation(int(allocHandle) - 1)
 	if err != nil {
 		return err
@@ -611,7 +615,7 @@ func (m *linearBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationH
 	return nil
 }
 
-func (m *linearBlockMetadata) DebugLogAllAllocations(log *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any)) {
+func (m *LinearBlockMetadata) DebugLogAllAllocations(log *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any)) {
 	firstVector := *m.accessSuballocationsFirst()
 	for i := m.firstNullItemsBeginCount; i < len(firstVector); i++ {
 		suballoc := firstVector[i]
@@ -629,7 +633,7 @@ func (m *linearBlockMetadata) DebugLogAllAllocations(log *slog.Logger, logFunc f
 	}
 }
 
-func (m *linearBlockMetadata) findSuballocation(offset int) (*Suballocation, error) {
+func (m *LinearBlockMetadata) findSuballocation(offset int) (*Suballocation, error) {
 
 	// Check first vector
 	firstVector := *m.accessSuballocationsFirst()
@@ -654,14 +658,14 @@ func (m *linearBlockMetadata) findSuballocation(offset int) (*Suballocation, err
 	return nil, errors.New("allocation not found in linear allocator")
 }
 
-func (m *linearBlockMetadata) shouldCompatFirstVector() bool {
+func (m *LinearBlockMetadata) shouldCompatFirstVector() bool {
 	nullItemCount := m.firstNullItemsMiddleCount + m.firstNullItemsMiddleCount
 	firstVector := *m.accessSuballocationsFirst()
 
 	return len(firstVector) > 32 && nullItemCount*2 >= (len(firstVector)-nullItemCount)*3
 }
 
-func (m *linearBlockMetadata) cleanupAfterFree() {
+func (m *LinearBlockMetadata) cleanupAfterFree() {
 	firstVectorPtr := m.accessSuballocationsFirst()
 	firstVector := *firstVectorPtr
 	secondVectorPtr := m.accessSuballocationsSecond()
@@ -774,12 +778,12 @@ func blocksOnSamePage(resourceOffset1, resourceSize1, resourceOffset2, pagesize 
 	return resource1EndPage == resource2StartPage
 }
 
-func (m *linearBlockMetadata) populateAllocationRequestLower(
+func (m *LinearBlockMetadata) populateAllocationRequestLower(
 	allocSize int, allocAlignment uint,
 	allocType SuballocationType,
 	allocRequest *AllocationRequest,
 ) bool {
-	debugMargin := m.getDebugMargin()
+	debugMargin := m.DebugMargin()
 	firstVector := *m.accessSuballocationsFirst()
 	secondVector := *m.accessSuballocationsSecond()
 
@@ -924,7 +928,7 @@ func (m *linearBlockMetadata) populateAllocationRequestLower(
 	return false
 }
 
-func (m *linearBlockMetadata) populateAllocationRequestUpper(
+func (m *LinearBlockMetadata) populateAllocationRequestUpper(
 	allocSize int, allocAlignment uint,
 	allocType SuballocationType,
 	allocRequest *AllocationRequest,
@@ -954,7 +958,7 @@ func (m *linearBlockMetadata) populateAllocationRequestUpper(
 
 	// Start from the base offset and move forward
 	resultOffset := baseOffset
-	debugMargin := m.getDebugMargin()
+	debugMargin := m.DebugMargin()
 
 	// Apply debug margin to the end of the allocation
 	if debugMargin > 0 {
@@ -1029,7 +1033,7 @@ func (m *linearBlockMetadata) populateAllocationRequestUpper(
 	return true, nil
 }
 
-func (m *linearBlockMetadata) accessSuballocationsFirst() *[]Suballocation {
+func (m *LinearBlockMetadata) accessSuballocationsFirst() *[]Suballocation {
 	if m.firstVectorIndex != 0 {
 		return &m.suballocations1
 	}
@@ -1037,7 +1041,7 @@ func (m *linearBlockMetadata) accessSuballocationsFirst() *[]Suballocation {
 	return &m.suballocations0
 }
 
-func (m *linearBlockMetadata) accessSuballocationsSecond() *[]Suballocation {
+func (m *LinearBlockMetadata) accessSuballocationsSecond() *[]Suballocation {
 	if m.firstVectorIndex != 0 {
 		return &m.suballocations0
 	}

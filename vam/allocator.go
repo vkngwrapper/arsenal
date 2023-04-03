@@ -183,7 +183,7 @@ func (a *Allocator) FindMemoryTypeIndexForBufferInfo(
 
 	// TODO: Vulkan 1.3
 
-	memReqs, res, err := a.getBufferMemoryRequirements(bufferInfo)
+	memReqs, res, err := a.getMemoryRequirementsFromBufferInfo(bufferInfo)
 	if err != nil {
 		return -1, res, err
 	}
@@ -200,7 +200,7 @@ func (a *Allocator) FindMemoryTypeIndexForImageInfo(
 
 	// TODO: Vulkan 1.3
 
-	memReqs, res, err := a.getImageMemoryRequirements(imageInfo)
+	memReqs, res, err := a.getMemoryRequirementsForImageInfo(imageInfo)
 	if err != nil {
 		return -1, res, err
 	}
@@ -209,7 +209,7 @@ func (a *Allocator) FindMemoryTypeIndexForImageInfo(
 	return a.findMemoryTypeIndex(memReqs.MemoryTypeBits, &o, &usage)
 }
 
-func (a *Allocator) getImageMemoryRequirements(
+func (a *Allocator) getMemoryRequirementsForImageInfo(
 	imageInfo core1_0.ImageCreateInfo,
 ) (*core1_0.MemoryRequirements, common.VkResult, error) {
 	image, res, err := a.device.CreateImage(a.allocationCallbacks, imageInfo)
@@ -221,7 +221,7 @@ func (a *Allocator) getImageMemoryRequirements(
 	return image.MemoryRequirements(), core1_0.VKSuccess, nil
 }
 
-func (a *Allocator) getBufferMemoryRequirements(
+func (a *Allocator) getMemoryRequirementsFromBufferInfo(
 	bufferInfo core1_0.BufferCreateInfo,
 ) (*core1_0.MemoryRequirements, common.VkResult, error) {
 	buffer, res, err := a.device.CreateBuffer(a.allocationCallbacks, bufferInfo)
@@ -700,7 +700,7 @@ func (a *Allocator) AllocateMemory(memoryRequirements *core1_0.MemoryRequirement
 
 	// Attempt to create a one-length slice for the provided alloc pointer
 	outAllocSlice := unsafe.Slice(outAlloc, 1)
-	res, err := a.multiAllocateMemory(
+	return a.multiAllocateMemory(
 		memoryRequirements,
 		false,
 		false,
@@ -709,7 +709,142 @@ func (a *Allocator) AllocateMemory(memoryRequirements *core1_0.MemoryRequirement
 		metadata.SuballocationUnknown,
 		outAllocSlice,
 	)
-	return res, err
+}
+
+func (a *Allocator) AllocateMemorySlice(memoryRequirements *core1_0.MemoryRequirements, o AllocationCreateInfo, allocations []Allocation) (common.VkResult, error) {
+	a.logger.Debug("Allocator::AllocateMemorySlice")
+
+	if memoryRequirements == nil {
+		return core1_0.VKErrorUnknown, errors.New("attempt to allocate with nil memory requirements")
+	}
+
+	if len(allocations) == 0 {
+		return core1_0.VKSuccess, nil
+	}
+
+	return a.multiAllocateMemory(
+		memoryRequirements,
+		false,
+		false,
+		nil,
+		nil,
+		nil,
+		&o,
+		metadata.SuballocationUnknown,
+		allocations,
+	)
+}
+
+func (a *Allocator) AllocateMemoryForBuffer(buffer core1_0.Buffer, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
+	a.logger.Debug("Allocator::AllocateMemoryForBuffer")
+
+	if buffer == nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to allocate for a nil buffer")
+	} else if outAlloc == nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil allocation")
+	}
+
+	var memReqs core1_0.MemoryRequirements
+	requiresDedicated, prefersDedicated, err := a.getBufferMemoryRequirements(buffer, &memReqs)
+	if err != nil {
+		return core1_0.VKErrorUnknown, err
+	}
+
+	// Attempt to create a one-length slice for the provided alloc pointer
+	outAllocSlice := unsafe.Slice(outAlloc, 1)
+	return a.multiAllocateMemory(
+		&memReqs,
+		requiresDedicated,
+		prefersDedicated,
+		buffer,
+		nil,
+		nil,
+		&o,
+		metadata.SuballocationBuffer,
+		outAllocSlice,
+	)
+}
+
+func (a *Allocator) getBufferMemoryRequirements(buffer core1_0.Buffer, memoryRequirements *core1_0.MemoryRequirements) (requiresDedicated, prefersDedicated bool, err error) {
+	if a.extensionData.DedicatedAllocations && a.extensionData.GetMemoryRequirements != nil {
+		dedicatedReqs := khr_dedicated_allocation.MemoryDedicatedRequirements{}
+		memReqs := core1_1.MemoryRequirements2{
+			NextOutData: common.NextOutData{
+				Next: &dedicatedReqs,
+			},
+		}
+
+		err = a.extensionData.GetMemoryRequirements.BufferMemoryRequirements2(
+			core1_1.BufferMemoryRequirementsInfo2{
+				Buffer: buffer,
+			},
+			&memReqs)
+		if err != nil {
+			return false, false, err
+		}
+
+		*memoryRequirements = memReqs.MemoryRequirements
+		return dedicatedReqs.RequiresDedicatedAllocation, dedicatedReqs.PrefersDedicatedAllocation, nil
+	}
+
+	*memoryRequirements = *buffer.MemoryRequirements()
+	return false, false, nil
+}
+
+func (a *Allocator) AllocateMemoryForImage(image core1_0.Image, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
+	a.logger.Debug("Allocator::AllocateMemoryForImage")
+
+	if image == nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to allocate for a nil image")
+	} else if outAlloc == nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil allocation")
+	}
+
+	var memReqs core1_0.MemoryRequirements
+	requiresDedicated, prefersDedicated, err := a.getImageMemoryRequirements(image, &memReqs)
+	if err != nil {
+		return core1_0.VKErrorUnknown, err
+	}
+
+	// Attempt to create a one-length slice for the provided alloc pointer
+	outAllocSlice := unsafe.Slice(outAlloc, 1)
+	return a.multiAllocateMemory(
+		&memReqs,
+		requiresDedicated,
+		prefersDedicated,
+		nil,
+		image,
+		nil,
+		&o,
+		metadata.SuballocationImageUnknown,
+		outAllocSlice,
+	)
+}
+
+func (a *Allocator) getImageMemoryRequirements(image core1_0.Image, memoryRequirements *core1_0.MemoryRequirements) (requiresDedicated, prefersDedicated bool, err error) {
+	if a.extensionData.DedicatedAllocations && a.extensionData.GetMemoryRequirements != nil {
+		dedicatedReqs := khr_dedicated_allocation.MemoryDedicatedRequirements{}
+		memReqs := core1_1.MemoryRequirements2{
+			NextOutData: common.NextOutData{
+				Next: &dedicatedReqs,
+			},
+		}
+
+		err = a.extensionData.GetMemoryRequirements.ImageMemoryRequirements2(
+			core1_1.ImageMemoryRequirementsInfo2{
+				Image: image,
+			},
+			&memReqs)
+		if err != nil {
+			return false, false, err
+		}
+
+		*memoryRequirements = memReqs.MemoryRequirements
+		return dedicatedReqs.RequiresDedicatedAllocation, dedicatedReqs.PrefersDedicatedAllocation, nil
+	}
+
+	*memoryRequirements = *image.MemoryRequirements()
+	return false, false, nil
 }
 
 func (a *Allocator) freeDedicatedMemory(alloc *Allocation) error {

@@ -63,7 +63,7 @@ func (g *BlockBufferImageGranularity) Destroy() {
 	}
 }
 
-func (g *BlockBufferImageGranularity) RoundupAllocRequest(allocType SuballocationType, allocSize int, allocAlignment uint) (int, uint, error) {
+func (g *BlockBufferImageGranularity) RoundUpAllocRequest(allocType SuballocationType, allocSize int, allocAlignment uint) (int, uint) {
 	if g.bufferImageGranularity > 1 &&
 		g.bufferImageGranularity <= MaxLowBufferImageGranularity &&
 		(allocType == SuballocationUnknown ||
@@ -74,34 +74,28 @@ func (g *BlockBufferImageGranularity) RoundupAllocRequest(allocType Suballocatio
 			allocAlignment = g.bufferImageGranularity
 		}
 
-		var err error
 		allocSize = memutils.AlignUp(allocSize, g.bufferImageGranularity)
-		if err != nil {
-			return 0, 0, err
-		}
 	}
 
-	return allocSize, allocAlignment, nil
+	return allocSize, allocAlignment
 }
 
 func (g *BlockBufferImageGranularity) CheckConflictAndAlignUp(
 	allocOffset, allocSize, blockOffset, blockSize int,
 	allocType SuballocationType,
-) (int, bool, error) {
+) (int, bool) {
 	if !g.IsEnabled() {
-		return allocOffset, false, nil
+		return allocOffset, false
 	}
 
 	startPage := g.getStartPage(allocOffset)
 	if g.regionInfo[startPage].allocCount > 0 &&
 		IsBufferImageGranularityConflict(g.regionInfo[startPage].allocType, allocType) {
-		var err error
+
 		allocOffset = memutils.AlignUp(allocOffset, g.bufferImageGranularity)
-		if err != nil {
-			return allocOffset, false, err
-		}
+
 		if blockSize < allocSize+allocOffset-blockOffset {
-			return allocOffset, true, nil
+			return allocOffset, true
 		}
 
 		startPage++
@@ -110,10 +104,10 @@ func (g *BlockBufferImageGranularity) CheckConflictAndAlignUp(
 	endPage := g.getEndPage(allocOffset, allocSize)
 	if endPage != startPage && g.regionInfo[endPage].allocCount > 0 &&
 		IsBufferImageGranularityConflict(g.regionInfo[endPage].allocType, allocType) {
-		return allocOffset, true, nil
+		return allocOffset, true
 	}
 
-	return allocOffset, false, nil
+	return allocOffset, false
 }
 
 func (g *BlockBufferImageGranularity) AllocPages(allocType SuballocationType, offset, size int) {
@@ -220,7 +214,7 @@ func (g *BlockBufferImageGranularity) getStartPage(offset int) int {
 }
 
 func (g *BlockBufferImageGranularity) getEndPage(offset int, size int) int {
-	return g.offsetToPageIndex((offset + size + 1) & int(^(g.bufferImageGranularity - 1)))
+	return g.offsetToPageIndex((offset + size - 1) & int(^(g.bufferImageGranularity - 1)))
 }
 
 func (g *BlockBufferImageGranularity) offsetToPageIndex(offset int) int {

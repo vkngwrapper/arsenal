@@ -50,39 +50,39 @@ type BlockMetadata interface {
 	Free(allocHandle BlockAllocationHandle) error
 }
 
-type blockMetadataBase struct {
+type BlockMetadataBase struct {
 	size                  int
 	allocationCallbacks   *driver.AllocationCallbacks
 	bufferImageGranlarity int
 	isVirtual             bool
 }
 
-func newBlockMetadata(bufferImageGranularity int, isVirtual bool) blockMetadataBase {
-	return blockMetadataBase{
+func NewBlockMetadata(bufferImageGranularity int, isVirtual bool) BlockMetadataBase {
+	return BlockMetadataBase{
 		size:                  0,
 		bufferImageGranlarity: bufferImageGranularity,
 		isVirtual:             isVirtual,
 	}
 }
 
-func (m *blockMetadataBase) Init(size int) {
+func (m *BlockMetadataBase) Init(size int) {
 	m.size = size
 }
 
-func (m *blockMetadataBase) IsVirtual() bool {
+func (m *BlockMetadataBase) IsVirtual() bool {
 	return m.isVirtual
 }
 
-func (m *blockMetadataBase) Size() int { return m.size }
+func (m *BlockMetadataBase) Size() int { return m.size }
 
-func (m *blockMetadataBase) printDetailedMap_Header(json jwriter.ObjectState, unusedBytes, allocationCount, unusedRangeCount int) {
+func (m *BlockMetadataBase) PrintDetailedMap_Header(json jwriter.ObjectState, unusedBytes, allocationCount, unusedRangeCount int) {
 	json.Name("TotalBytes").Int(m.Size())
 	json.Name("UnusedBytes").Int(unusedBytes)
 	json.Name("Allocations").Int(allocationCount)
 	json.Name("UnusedRanges").Int(unusedRangeCount)
 }
 
-func (m *blockMetadataBase) getDebugMargin() int {
+func (m *BlockMetadataBase) DebugMargin() int {
 	if m.isVirtual {
 		return 0
 	}
