@@ -153,7 +153,8 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 
 			allocator.memoryBlockLists[typeIndex].Init(
 				useMutex,
-				logger,
+				allocator,
+				nil,
 				typeIndex,
 				preferredBlockSize,
 				0,
@@ -163,8 +164,6 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 				0,
 				0.5,
 				allocator.deviceMemory.MemoryTypeMinimumAlignment(typeIndex),
-				allocator.extensionData,
-				allocator.deviceMemory,
 				nil,
 			)
 		}

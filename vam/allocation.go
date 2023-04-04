@@ -9,6 +9,7 @@ import (
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
+	"golang.org/x/exp/slog"
 	"unsafe"
 )
 
@@ -70,11 +71,14 @@ type Allocation struct {
 	deviceMemory      *vulkan.DeviceMemoryProperties
 	memory            *vulkan.SynchronizedMemory
 
+	logger          *slog.Logger
+	parentAllocator *Allocator
+
 	blockData     blockData
 	dedicatedData dedicatedData
 }
 
-func (a *Allocation) init(deviceMemory *vulkan.DeviceMemoryProperties, mappingAllowed bool) {
+func (a *Allocation) init(allocator *Allocator, mappingAllowed bool) {
 	var flags allocationFlags
 	if mappingAllowed {
 		flags = allocationMappingAllowed
@@ -88,7 +92,9 @@ func (a *Allocation) init(deviceMemory *vulkan.DeviceMemoryProperties, mappingAl
 	a.memoryTypeIndex = 0
 	a.allocationType = 0
 	a.suballocationType = 0
-	a.deviceMemory = deviceMemory
+	a.deviceMemory = allocator.deviceMemory
+	a.parentAllocator = allocator
+	a.logger = allocator.logger
 	a.memory = nil
 	a.blockData.handle = 0
 	a.blockData.block = nil
@@ -193,6 +199,8 @@ func (a *Allocation) mappedData() (unsafe.Pointer, error) {
 }
 
 func (a *Allocation) FindOffset() int {
+	a.logger.Debug("Allocation::FindOffset")
+
 	if a.allocationType == allocationTypeBlock {
 		offset, err := a.blockData.block.metadata.AllocationOffset(a.blockData.handle)
 		if err != nil {
@@ -206,6 +214,8 @@ func (a *Allocation) FindOffset() int {
 }
 
 func (a *Allocation) Map() (unsafe.Pointer, common.VkResult, error) {
+	a.logger.Debug("Allocation::Map")
+
 	if !a.IsMappingAllowed() {
 		return nil, core1_0.VKErrorMemoryMapFailed, errors.New("attempted to perform a map for an allocation that does not permit mapping")
 	}
@@ -221,7 +231,21 @@ func (a *Allocation) Map() (unsafe.Pointer, common.VkResult, error) {
 }
 
 func (a *Allocation) Unmap() error {
+	a.logger.Debug("Allocation::Unmap")
+
 	return a.memory.Unmap(1)
+}
+
+func (a *Allocation) Flush(offset, size int) (common.VkResult, error) {
+	a.logger.Debug("Allocation::Flush")
+
+	return a.flushOrInvalidate(offset, size, vulkan.CacheOperationFlush)
+}
+
+func (a *Allocation) Invalidate(offset, size int) (common.VkResult, error) {
+	a.logger.Debug("Allocation::Invalidate")
+
+	return a.flushOrInvalidate(offset, size, vulkan.CacheOperationInvalidate)
 }
 
 func (a *Allocation) BindBufferMemory(offset int, buffer core1_0.Buffer, next common.Options) (common.VkResult, error) {
@@ -264,12 +288,14 @@ func (a *Allocation) printParameters(json *jwriter.ObjectState) {
 }
 
 func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.MappedMemoryRange) (bool, error) {
+
+	// A size of -1 indicates the whole allocation
 	if size == 0 || size < -1 || !a.deviceMemory.IsMemoryTypeHostNonCoherent(a.memoryTypeIndex) {
 		return false, nil
 	}
 
 	nonCoherentAtomSize := a.deviceMemory.DeviceProperties().Limits.NonCoherentAtomSize
-	allocationSize := a.size
+	allocationSize := a.Size()
 
 	if offset > allocationSize {
 		return false, errors.Newf("offset %d is past the end of the allocation, which is size %d", offset, allocationSize)
@@ -281,10 +307,10 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 	outRange.Next = nil
 	outRange.Memory = a.Memory()
 	outRange.Offset = memutils.AlignDown(offset, uint(nonCoherentAtomSize))
-	outRange.Size = allocationSize - outRange.Offset
 
 	switch a.allocationType {
 	case allocationTypeDedicated:
+		outRange.Size = allocationSize - outRange.Offset
 		if size > 0 {
 			alignedSize := memutils.AlignUp(size+(offset-outRange.Offset), uint(nonCoherentAtomSize))
 			if alignedSize < outRange.Size {
@@ -295,7 +321,7 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 	case allocationTypeBlock:
 		// Calculate Size within the allocation
 		if size == -1 {
-			size = outRange.Size
+			size = allocationSize - outRange.Offset
 		}
 
 		outRange.Size = memutils.AlignUp(size+(offset-outRange.Offset), uint(nonCoherentAtomSize))
@@ -304,13 +330,15 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 		allocationOffset := a.FindOffset()
 
 		if allocationOffset%nonCoherentAtomSize != 0 {
-			return false, errors.Newf("the allocation has an invalid offset %d for non-coherent memory, which has an alignment of %d", allocationOffset, nonCoherentAtomSize)
+			panic(fmt.Sprintf("the allocation has an invalid offset %d for non-coherent memory, which has an alignment of %d", allocationOffset, nonCoherentAtomSize))
 		}
 
 		blockSize := a.blockData.block.metadata.Size()
 		outRange.Offset += allocationOffset
-		if blockSize-outRange.Offset < outRange.Size {
-			outRange.Size = blockSize - outRange.Offset
+
+		restOfBlock := blockSize - outRange.Offset
+		if restOfBlock < outRange.Size {
+			outRange.Size = restOfBlock
 		}
 		return true, nil
 	}
@@ -318,7 +346,7 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 	return false, errors.Newf("attempted to get the flush or invalidate range of an allocation with invalid type %s", a.allocationType.String())
 }
 
-func (a *Allocation) flushOrInvalidateAllocation(offset, size int, operation vulkan.CacheOperation) (common.VkResult, error) {
+func (a *Allocation) flushOrInvalidate(offset, size int, operation vulkan.CacheOperation) (common.VkResult, error) {
 	var memRange core1_0.MappedMemoryRange
 	success, err := a.flushOrInvalidateRange(offset, size, &memRange)
 	if err != nil {
@@ -347,7 +375,7 @@ func (a *Allocation) fillAllocation(pattern uint8) {
 	for i := 0; i < a.size; i++ {
 		dataSlice[i] = pattern
 	}
-	_, err = a.flushOrInvalidateAllocation(0, -1, vulkan.CacheOperationFlush)
+	_, err = a.flushOrInvalidate(0, -1, vulkan.CacheOperationFlush)
 	if err != nil {
 		panic(fmt.Sprintf("failed when attempting to flush host cache during debug pattern fill: %+v", err))
 	}
@@ -387,4 +415,25 @@ func (a *Allocation) setPrev(alloc *Allocation) {
 	}
 
 	a.dedicatedData.prevAlloc = alloc
+}
+
+func (a *Allocation) ParentPool() *Pool {
+	switch a.allocationType {
+	case allocationTypeBlock:
+		return a.blockData.block.parentPool
+	case allocationTypeDedicated:
+		return a.dedicatedData.parentPool
+	}
+
+	panic(fmt.Sprintf("invalid allocation type: %s", a.allocationType.String()))
+}
+
+func (a *Allocation) Free() error {
+	a.logger.Debug("Allocation::Free")
+
+	// Attempt to create a one-length slice for the provided alloc pointer
+	allocSlice := unsafe.Slice(a, 1)
+	return a.parentAllocator.multiFreeMemory(
+		allocSlice,
+	)
 }

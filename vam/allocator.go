@@ -1,6 +1,7 @@
 package vam
 
 import (
+	"fmt"
 	"github.com/cockroachdb/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
@@ -340,7 +341,7 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 		}
 	}
 
-	alloc.init(a.deviceMemory, isMappingAllowed)
+	alloc.init(a, isMappingAllowed)
 	alloc.initDedicatedAllocation(pool, memoryTypeIndex, mem, suballocationType, size)
 
 	userDataStr, ok := userData.(string)
@@ -847,16 +848,56 @@ func (a *Allocator) getImageMemoryRequirements(image core1_0.Image, memoryRequir
 	return false, false, nil
 }
 
-func (a *Allocator) freeDedicatedMemory(alloc *Allocation) error {
+func (a *Allocator) FreeAllocationSlice(allocs []Allocation) error {
+	a.logger.Debug("Allocator::FreeAllocationSlice")
+
+	if len(allocs) == 0 {
+		return nil
+	}
+
+	return a.multiFreeMemory(allocs)
+}
+
+func (a *Allocator) multiFreeMemory(allocs []Allocation) error {
+	for i := 0; i < len(allocs); i++ {
+		if memutils.DebugMargin > 0 {
+			allocs[i].fillAllocation(memutils.DestroyedFillPattern)
+		}
+
+		err := a.freeSingleAllocation(&allocs[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *Allocator) freeSingleAllocation(alloc *Allocation) error {
+	switch alloc.allocationType {
+	case allocationTypeBlock:
+		pool := alloc.ParentPool()
+		if pool != nil {
+			return pool.blockList.Free(alloc)
+		}
+
+		return a.memoryBlockLists[alloc.MemoryTypeIndex()].Free(alloc)
+	case allocationTypeDedicated:
+		a.freeDedicatedMemory(alloc)
+		return nil
+	}
+
+	panic(fmt.Sprintf("unexpected allocation type: %s", alloc.allocationType.String()))
+}
+
+func (a *Allocator) freeDedicatedMemory(alloc *Allocation) {
 	if alloc == nil {
-		return errors.New("attempted to free nil allocation")
+		panic("attempted to free nil allocation")
 	} else if alloc.allocationType != allocationTypeDedicated {
-		return errors.New("attempted to free dedicated memory for a non-dedicated allocation")
+		panic("attempted to free dedicated memory for a non-dedicated allocation")
 	}
 
 	memoryTypeIndex := alloc.MemoryTypeIndex()
-	heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex)
-
 	parentPool := alloc.dedicatedData.parentPool
 	if parentPool == nil {
 		// Default pool
@@ -868,9 +909,76 @@ func (a *Allocator) freeDedicatedMemory(alloc *Allocation) error {
 
 	a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, alloc.Size(), alloc.memory)
 
+	heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex)
 	a.deviceMemory.RemoveAllocation(heapIndex, alloc.Size())
 
-	return nil
+	a.logger.Debug("    Freed DedicatedMemory", slog.Int("MemoryTypeIndex", memoryTypeIndex))
+}
+
+func (a *Allocator) FlushAllocationSlice(allocations []Allocation, offsets []int, sizes []int) (common.VkResult, error) {
+	a.logger.Debug("Allocator::FlushAllocationSlice")
+
+	if len(allocations) != len(offsets) {
+		return core1_0.VKErrorUnknown, errors.Newf("allocations contains %d elements but offsets contains %d elements- they must be equal", len(allocations), len(offsets))
+	}
+
+	if len(allocations) != len(sizes) {
+		return core1_0.VKErrorUnknown, errors.Newf("allocations contains %d elements but sizes contains %d elements- they must be equal", len(allocations), len(sizes))
+	}
+
+	if len(allocations) == 0 {
+		return core1_0.VKSuccess, nil
+	}
+
+	return a.flushOrInvalidateAllocations(allocations, offsets, sizes, vulkan.CacheOperationFlush)
+}
+
+func (a *Allocator) InvalidateAllocationSlice(allocations []Allocation, offsets []int, sizes []int) (common.VkResult, error) {
+	a.logger.Debug("Allocator::InvalidateAllocationSlize")
+
+	if len(allocations) != len(offsets) {
+		return core1_0.VKErrorUnknown, errors.Newf("allocations contains %d elements but offsets contains %d elements- they must be equal", len(allocations), len(offsets))
+	}
+
+	if len(allocations) != len(sizes) {
+		return core1_0.VKErrorUnknown, errors.Newf("allocations contains %d elements but sizes contains %d elements- they must be equal", len(allocations), len(sizes))
+	}
+
+	if len(allocations) == 0 {
+		return core1_0.VKSuccess, nil
+	}
+
+	return a.flushOrInvalidateAllocations(allocations, offsets, sizes, vulkan.CacheOperationInvalidate)
+}
+
+func (a *Allocator) flushOrInvalidateAllocations(allocations []Allocation, offsets []int, sizes []int, operation vulkan.CacheOperation) (common.VkResult, error) {
+
+	ranges := make([]core1_0.MappedMemoryRange, 0, len(allocations))
+
+	for i := 0; i < len(allocations); i++ {
+		var mappedRange core1_0.MappedMemoryRange
+		success, err := allocations[i].flushOrInvalidateRange(offsets[i], sizes[i], &mappedRange)
+		if err != nil {
+			return core1_0.VKErrorUnknown, err
+		}
+
+		if success {
+			ranges = append(ranges, mappedRange)
+		}
+	}
+
+	if len(ranges) == 0 {
+		return core1_0.VKSuccess, nil
+	}
+
+	switch operation {
+	case vulkan.CacheOperationFlush:
+		return a.device.FlushMappedMemoryRanges(ranges)
+	case vulkan.CacheOperationInvalidate:
+		return a.device.InvalidateMappedMemoryRanges(ranges)
+	}
+
+	panic(fmt.Sprintf("unknown cache operation %s", operation.String()))
 }
 
 func (a *Allocator) CheckCorruption(memoryTypeBits uint32) (common.VkResult, error) {
@@ -984,7 +1092,8 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 
 	pool.blockList.Init(
 		a.useMutex,
-		a.logger,
+		a,
+		pool,
 		createInfo.MemoryTypeIndex,
 		blockSize,
 		createInfo.MinBlockCount,
@@ -994,8 +1103,6 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 		createInfo.Flags&PoolCreateAlgorithmMask,
 		createInfo.Priority,
 		alignment,
-		a.extensionData,
-		a.deviceMemory,
 		createInfo.MemoryAllocateNext,
 	)
 

@@ -527,7 +527,7 @@ func (m *LinearBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 			m.cleanupAfterFree()
 			return nil
 		}
-	} else {
+	} else if m.secondVectorMode == SecondVectorModeEmpty {
 		// Last allocation in first vector
 		lastSuballoc := firstVector[len(firstVector)-1]
 		if lastSuballoc.Offset == offset {
@@ -658,7 +658,7 @@ func (m *LinearBlockMetadata) findSuballocation(offset int) (*Suballocation, err
 	return nil, errors.New("allocation not found in linear allocator")
 }
 
-func (m *LinearBlockMetadata) shouldCompatFirstVector() bool {
+func (m *LinearBlockMetadata) shouldCompactFirstVector() bool {
 	nullItemCount := m.firstNullItemsMiddleCount + m.firstNullItemsMiddleCount
 	firstVector := *m.accessSuballocationsFirst()
 
@@ -718,7 +718,7 @@ func (m *LinearBlockMetadata) cleanupAfterFree() {
 		*secondVectorPtr = secondVector
 	}
 
-	if m.shouldCompatFirstVector() {
+	if m.shouldCompactFirstVector() {
 		nonNullItemCount := len(firstVector) - nullItemsCount
 		srcIndex := m.firstNullItemsBeginCount
 		for dstIndex := 0; dstIndex < nonNullItemCount; dstIndex++ {
@@ -734,6 +734,8 @@ func (m *LinearBlockMetadata) cleanupAfterFree() {
 
 		firstVector = firstVector[:nonNullItemCount]
 		*firstVectorPtr = firstVector
+		m.firstNullItemsBeginCount = 0
+		m.firstNullItemsMiddleCount = 0
 	}
 
 	if len(secondVector) == 0 {

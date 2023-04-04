@@ -20,10 +20,12 @@ import (
 )
 
 type memoryBlockList struct {
-	allocOptions  common.Options
-	extensionData *vulkan.ExtensionData
-	deviceMemory  *vulkan.DeviceMemoryProperties
-	logger        *slog.Logger
+	allocOptions    common.Options
+	extensionData   *vulkan.ExtensionData
+	parentAllocator *Allocator
+	parentPool      *Pool
+	deviceMemory    *vulkan.DeviceMemoryProperties
+	logger          *slog.Logger
 
 	memoryTypeIndex        int
 	preferredBlockSize     int
@@ -55,7 +57,8 @@ func (l *memoryBlockList) BlockCount() int                     { return len(l.bl
 
 func (l *memoryBlockList) Init(
 	useMutex bool,
-	logger *slog.Logger,
+	allocator *Allocator,
+	pool *Pool,
 	memoryTypeIndex int,
 	preferredBlockSize int,
 	minBlockCount, maxBlockCount int,
@@ -64,14 +67,14 @@ func (l *memoryBlockList) Init(
 	algorithm PoolCreateFlags,
 	priority float32,
 	minAllocationAlignment uint,
-	extensionData *vulkan.ExtensionData,
-	deviceMemoryProps *vulkan.DeviceMemoryProperties,
 	allocOptions common.Options,
 ) {
-	l.logger = logger
+	l.parentAllocator = allocator
+	l.parentPool = pool
+	l.logger = allocator.logger
 	l.allocOptions = allocOptions
-	l.extensionData = extensionData
-	l.deviceMemory = deviceMemoryProps
+	l.extensionData = allocator.extensionData
+	l.deviceMemory = allocator.deviceMemory
 	l.memoryTypeIndex = memoryTypeIndex
 	l.preferredBlockSize = preferredBlockSize
 	l.minBlockCount = minBlockCount
@@ -197,7 +200,7 @@ func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, erro
 	// Build allocation
 	block := l.blockPool.Get().(*deviceMemoryBlock)
 
-	block.Init(l.logger, l.deviceMemory, l.memoryTypeIndex, memory, allocInfo.AllocationSize, l.nextBlockId, l.algorithm, l.bufferImageGranularity)
+	block.Init(l.logger, l.parentPool, l.deviceMemory, l.memoryTypeIndex, memory, allocInfo.AllocationSize, l.nextBlockId, l.algorithm, l.bufferImageGranularity)
 	l.nextBlockId++
 
 	l.blocks = append(l.blocks, block)
@@ -479,6 +482,7 @@ func (l *memoryBlockList) Free(alloc *Allocation) error {
 	}
 
 	if blockToDelete != nil {
+		l.logger.Debug("    Deleted empty block", slog.Int("block.id", blockToDelete.id))
 		err = blockToDelete.Destroy()
 		if err != nil {
 			panic(fmt.Sprintf("unexpected failure when destroying a memory block in response to freeing an allocation: %+v", err))
@@ -501,7 +505,7 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 	budgetExceeded := heapBudget.Usage >= heapBudget.Budget
 
 	if l.IsCorruptionDetectionEnabled() {
-		_, err = block.ValidateMagicValueAfterAllocation(alloc.FindOffset(), alloc.size)
+		_, err = block.ValidateMagicValueAfterAllocation(alloc.FindOffset(), alloc.Size())
 		if err != nil {
 			panic(fmt.Sprintf("unexpected error while validating magic values: %+v", err))
 		}
@@ -520,8 +524,9 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 	if err != nil {
 		panic(fmt.Sprintf("unexpected error when freeing allocation with handle %+v in metadata: %+v", alloc.blockData.handle, err))
 	}
-
 	block.memory.RecordSuballocSubfree()
+
+	l.logger.Debug("    Freed from block", slog.Int("MemoryTypeIndex", l.memoryTypeIndex))
 
 	canDeleteBlock := len(l.blocks) > l.minBlockCount
 
@@ -612,7 +617,7 @@ func (l *memoryBlockList) commitAllocationRequest(allocRequest *metadata.Allocat
 		}
 	}
 
-	outAlloc.init(l.deviceMemory, isMappingAllowed)
+	outAlloc.init(l.parentAllocator, isMappingAllowed)
 	err := block.metadata.Alloc(allocRequest, suballocType, outAlloc)
 	if err != nil {
 		return core1_0.VKErrorUnknown, err

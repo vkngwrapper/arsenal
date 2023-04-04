@@ -15,6 +15,7 @@ import (
 type deviceMemoryBlock struct {
 	id              int
 	memory          *vulkan.SynchronizedMemory
+	parentPool      *Pool
 	memoryTypeIndex int
 	logger          *slog.Logger
 
@@ -24,6 +25,7 @@ type deviceMemoryBlock struct {
 
 func (b *deviceMemoryBlock) Init(
 	logger *slog.Logger,
+	pool *Pool,
 	deviceMemory *vulkan.DeviceMemoryProperties,
 	newMemoryTypeIndex int,
 	newMemory *vulkan.SynchronizedMemory,
@@ -36,6 +38,7 @@ func (b *deviceMemoryBlock) Init(
 		panic("attempting to initialize a device memory block that is already in use")
 	}
 
+	b.parentPool = pool
 	b.memoryTypeIndex = newMemoryTypeIndex
 	b.id = id
 	b.memory = newMemory

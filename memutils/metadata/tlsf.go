@@ -844,7 +844,6 @@ func (m *TLSFBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 		m.mergeBlock(next, block)
 
 		m.insertFreeBlock(next)
-		return nil
 	}
 
 	return nil
