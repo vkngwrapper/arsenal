@@ -14,6 +14,7 @@ import (
 	"github.com/vkngwrapper/core/v2/core1_2"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
 	"golang.org/x/exp/slog"
+	"sort"
 	"strconv"
 	"sync"
 	"unsafe"
@@ -570,6 +571,12 @@ func (l *memoryBlockList) incrementallySortBlocks() {
 			return
 		}
 	}
+}
+
+func (l *memoryBlockList) SortByFreeSize() {
+	sort.Slice(l.blocks, func(i, j int) bool {
+		return l.blocks[i].metadata.SumFreeSize() < l.blocks[j].metadata.SumFreeSize()
+	})
 }
 
 func (l *memoryBlockList) calcMaxBlockSize() int {

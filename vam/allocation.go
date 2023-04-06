@@ -9,7 +9,6 @@ import (
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"golang.org/x/exp/slog"
 	"unsafe"
 )
 
@@ -68,10 +67,8 @@ type Allocation struct {
 	memoryTypeIndex   int
 	allocationType    allocationType
 	suballocationType metadata.SuballocationType
-	deviceMemory      *vulkan.DeviceMemoryProperties
 	memory            *vulkan.SynchronizedMemory
 
-	logger          *slog.Logger
 	parentAllocator *Allocator
 
 	blockData     blockData
@@ -92,9 +89,7 @@ func (a *Allocation) init(allocator *Allocator, mappingAllowed bool) {
 	a.memoryTypeIndex = 0
 	a.allocationType = 0
 	a.suballocationType = 0
-	a.deviceMemory = allocator.deviceMemory
 	a.parentAllocator = allocator
-	a.logger = allocator.logger
 	a.memory = nil
 	a.blockData.handle = 0
 	a.blockData.block = nil
@@ -180,11 +175,12 @@ func (a *Allocation) Name() string {
 
 func (a *Allocation) MemoryTypeIndex() int         { return a.memoryTypeIndex }
 func (a *Allocation) Size() int                    { return a.size }
+func (a *Allocation) Alignment() uint              { return a.alignment }
 func (a *Allocation) Memory() core1_0.DeviceMemory { return a.memory.VulkanDeviceMemory() }
 func (a *Allocation) isPersistentMap() bool        { return a.flags&allocationPersistentMap != 0 }
 func (a *Allocation) IsMappingAllowed() bool       { return a.flags&allocationMappingAllowed != 0 }
 func (a *Allocation) MemoryType() core1_0.MemoryType {
-	return a.deviceMemory.MemoryTypeProperties(a.memoryTypeIndex)
+	return a.parentAllocator.deviceMemory.MemoryTypeProperties(a.memoryTypeIndex)
 }
 
 func (a *Allocation) mappedData() (unsafe.Pointer, error) {
@@ -199,7 +195,7 @@ func (a *Allocation) mappedData() (unsafe.Pointer, error) {
 }
 
 func (a *Allocation) FindOffset() int {
-	a.logger.Debug("Allocation::FindOffset")
+	a.parentAllocator.logger.Debug("Allocation::FindOffset")
 
 	if a.allocationType == allocationTypeBlock {
 		offset, err := a.blockData.block.metadata.AllocationOffset(a.blockData.handle)
@@ -214,7 +210,7 @@ func (a *Allocation) FindOffset() int {
 }
 
 func (a *Allocation) Map() (unsafe.Pointer, common.VkResult, error) {
-	a.logger.Debug("Allocation::Map")
+	a.parentAllocator.logger.Debug("Allocation::Map")
 
 	if !a.IsMappingAllowed() {
 		return nil, core1_0.VKErrorMemoryMapFailed, errors.New("attempted to perform a map for an allocation that does not permit mapping")
@@ -231,19 +227,19 @@ func (a *Allocation) Map() (unsafe.Pointer, common.VkResult, error) {
 }
 
 func (a *Allocation) Unmap() error {
-	a.logger.Debug("Allocation::Unmap")
+	a.parentAllocator.logger.Debug("Allocation::Unmap")
 
 	return a.memory.Unmap(1)
 }
 
 func (a *Allocation) Flush(offset, size int) (common.VkResult, error) {
-	a.logger.Debug("Allocation::Flush")
+	a.parentAllocator.logger.Debug("Allocation::Flush")
 
 	return a.flushOrInvalidate(offset, size, vulkan.CacheOperationFlush)
 }
 
 func (a *Allocation) Invalidate(offset, size int) (common.VkResult, error) {
-	a.logger.Debug("Allocation::Invalidate")
+	a.parentAllocator.logger.Debug("Allocation::Invalidate")
 
 	return a.flushOrInvalidate(offset, size, vulkan.CacheOperationInvalidate)
 }
@@ -290,11 +286,11 @@ func (a *Allocation) printParameters(json *jwriter.ObjectState) {
 func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.MappedMemoryRange) (bool, error) {
 
 	// A size of -1 indicates the whole allocation
-	if size == 0 || size < -1 || !a.deviceMemory.IsMemoryTypeHostNonCoherent(a.memoryTypeIndex) {
+	if size == 0 || size < -1 || !a.parentAllocator.deviceMemory.IsMemoryTypeHostNonCoherent(a.memoryTypeIndex) {
 		return false, nil
 	}
 
-	nonCoherentAtomSize := a.deviceMemory.DeviceProperties().Limits.NonCoherentAtomSize
+	nonCoherentAtomSize := a.parentAllocator.deviceMemory.DeviceProperties().Limits.NonCoherentAtomSize
 	allocationSize := a.Size()
 
 	if offset > allocationSize {
@@ -356,12 +352,12 @@ func (a *Allocation) flushOrInvalidate(offset, size int, operation vulkan.CacheO
 		return core1_0.VKSuccess, nil
 	}
 
-	return a.deviceMemory.FlushOrInvalidateAllocations([]core1_0.MappedMemoryRange{memRange}, operation)
+	return a.parentAllocator.deviceMemory.FlushOrInvalidateAllocations([]core1_0.MappedMemoryRange{memRange}, operation)
 }
 
 func (a *Allocation) fillAllocation(pattern uint8) {
 	if memutils.DebugMargin == 0 || !a.IsMappingAllowed() ||
-		a.deviceMemory.MemoryTypeProperties(a.memoryTypeIndex).PropertyFlags&core1_0.MemoryPropertyHostVisible == 0 {
+		a.parentAllocator.deviceMemory.MemoryTypeProperties(a.memoryTypeIndex).PropertyFlags&core1_0.MemoryPropertyHostVisible == 0 {
 		// Don't fill allocations that can't be filled, or if memory debugging is turned off
 		return
 	}
@@ -429,7 +425,7 @@ func (a *Allocation) ParentPool() *Pool {
 }
 
 func (a *Allocation) Free() error {
-	a.logger.Debug("Allocation::Free")
+	a.parentAllocator.logger.Debug("Allocation::Free")
 
 	// Attempt to create a one-length slice for the provided alloc pointer
 	allocSlice := unsafe.Slice(a, 1)

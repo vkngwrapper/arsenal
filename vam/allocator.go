@@ -1133,3 +1133,21 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 
 	return pool, core1_0.VKSuccess, nil
 }
+
+func (a *Allocator) BeginDefragmentation(o DefragmentationInfo, defragContext *DefragmentationContext) (common.VkResult, error) {
+	a.logger.Debug("Allocator::BeginDefragmentation")
+
+	if defragContext == nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to begin defragmentation with a nil context")
+	}
+
+	if o.Pool != nil {
+		// Linear can't defragment
+		if o.Pool.blockList.Algorithm()&PoolCreateLinearAlgorithm != 0 {
+			return core1_0.VKErrorFeatureNotPresent, core1_0.VKErrorFeatureNotPresent.ToError()
+		}
+	}
+
+	defragContext.init(a, o)
+	return core1_0.VKSuccess, nil
+}
