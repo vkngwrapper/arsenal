@@ -1020,7 +1020,7 @@ func (a *Allocator) checkCustomPools(memoryTypeBits uint32) (common.VkResult, er
 
 	res := core1_0.VKErrorFeatureNotPresent
 	for pool := a.pools; pool != nil; pool = pool.next {
-		memBit := 1 << pool.blockList.memoryTypeIndex
+		memBit := uint32(1 << pool.blockList.memoryTypeIndex)
 		if memBit&memoryTypeBits == 0 {
 			continue
 		}
@@ -1056,7 +1056,7 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 		return nil, core1_0.VKErrorUnknown, errors.Newf("provided MinBlockCount %d was greater than provided MaxBlockCount %d", createInfo.MinBlockCount, createInfo.MaxBlockCount)
 	}
 
-	memTypeBits := 1 << createInfo.MemoryTypeIndex
+	memTypeBits := uint32(1 << createInfo.MemoryTypeIndex)
 	if createInfo.MemoryTypeIndex >= a.deviceMemory.MemoryTypeCount() || memTypeBits&a.globalMemoryTypeBits == 0 {
 		return nil, core1_0.VKErrorFeatureNotPresent, core1_0.VKErrorFeatureNotPresent.ToError()
 	}
@@ -1146,8 +1146,10 @@ func (a *Allocator) BeginDefragmentation(o DefragmentationInfo, defragContext *D
 		if o.Pool.blockList.Algorithm()&PoolCreateLinearAlgorithm != 0 {
 			return core1_0.VKErrorFeatureNotPresent, core1_0.VKErrorFeatureNotPresent.ToError()
 		}
+		defragContext.initForPool(o.Pool, &o)
+	} else {
+		defragContext.initForAllocator(a, &o)
 	}
 
-	defragContext.init(a, o)
 	return core1_0.VKSuccess, nil
 }

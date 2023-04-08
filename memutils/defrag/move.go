@@ -13,14 +13,16 @@ const (
 	DefragmentationMoveDestroy
 )
 
-type DefragmentOperationHandler func(srcAllocation any, dstAllocation any) DefragmentationMoveOperation
+type DefragmentOperationHandler[T any] func(move *DefragmentationMove[T]) error
 
-type DefragmentationMove struct {
+type DefragmentationMove[T any] struct {
+	MoveOperation DefragmentationMoveOperation
+
 	Size             int
 	SrcBlockMetadata metadata.BlockMetadata
-	SrcAllocation    any
+	SrcAllocation    *T
 	DstBlockMetadata metadata.BlockMetadata
-	DstTmpAllocation any
+	DstTmpAllocation T
 }
 
 type defragmentOperation uint32
@@ -51,12 +53,12 @@ func (m defragmentOperation) String() string {
 	return defragOperationMapping[m]
 }
 
-type stateBalanced struct {
+type stateBalanced[T any] struct {
 	AverageFreeSize  int
 	AverageAllocSize int
 }
 
-func (s *stateBalanced) UpdateStatistics(blockList BlockList) {
+func (s *stateBalanced[T]) UpdateStatistics(blockList BlockList[T]) {
 	s.AverageFreeSize = 0
 	s.AverageAllocSize = 0
 
@@ -79,9 +81,9 @@ type stateExtensive struct {
 	FirstFreeBlock int
 }
 
-type moveAllocationData struct {
+type MoveAllocationData[T any] struct {
 	Alignment         uint
 	SuballocationType metadata.SuballocationType
 	Flags             memutils.AllocationCreateFlags
-	Move              DefragmentationMove
+	Move              DefragmentationMove[T]
 }

@@ -6,17 +6,16 @@ import (
 	"github.com/vkngwrapper/core/v2/common"
 )
 
-type BlockList interface {
+type BlockList[T any] interface {
 	MetadataForBlock(index int) metadata.BlockMetadata
 	BlockCount() int
 	AddStatistics(stats *memutils.Statistics)
-	MoveDataForUserData(userData any) moveAllocationData
-	MemoryTypeIndexForUserData(userData any) int
+	MoveDataForUserData(userData any) MoveAllocationData[T]
 	BufferImageGranularity() int
 
 	Lock()
 	Unlock()
 
-	CommitAllocationRequest(allocRequest *metadata.AllocationRequest, blockIndex int, alignment uint, flags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *any) (common.VkResult, error)
+	CommitDefragAllocationRequest(allocRequest *metadata.AllocationRequest, blockIndex int, alignment uint, flags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *T) (common.VkResult, error)
 	SwapBlocks(leftIndex, rightIndex int)
 }

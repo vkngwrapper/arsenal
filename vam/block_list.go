@@ -5,6 +5,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/vkngwrapper/arsenal/memutils"
+	"github.com/vkngwrapper/arsenal/memutils/defrag"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
@@ -729,4 +730,59 @@ func (l *memoryBlockList) CheckCorruption() (common.VkResult, error) {
 	}
 
 	return core1_0.VKSuccess, nil
+}
+
+func (l *memoryBlockList) MetadataForBlock(blockIndex int) metadata.BlockMetadata {
+	return l.blocks[blockIndex].metadata
+}
+
+func (l *memoryBlockList) Lock() {
+	l.mutex.Lock()
+}
+
+func (l *memoryBlockList) Unlock() {
+	l.mutex.Unlock()
+}
+
+func (l *memoryBlockList) CommitDefragAllocationRequest(allocRequest *metadata.AllocationRequest, blockIndex int, alignment uint, flags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
+	return l.commitAllocationRequest(
+		allocRequest,
+		l.blocks[blockIndex],
+		alignment,
+		flags,
+		userData,
+		suballocType,
+		outAlloc,
+	)
+}
+
+func (l *memoryBlockList) MoveDataForUserData(userData any) defrag.MoveAllocationData[Allocation] {
+	alloc, ok := userData.(*Allocation)
+	if !ok || alloc == nil {
+		panic(fmt.Sprintf("attempted to create a MoveAllocationData for a non-Allocation userData: %+v", userData))
+	}
+
+	var flags memutils.AllocationCreateFlags
+
+	if alloc.isPersistentMap() {
+		flags |= memutils.AllocationCreateMapped
+	}
+	if alloc.IsMappingAllowed() {
+		flags |= memutils.AllocationCreateHostAccessSequentialWrite | memutils.AllocationCreateHostAccessRandom
+	}
+
+	return defrag.MoveAllocationData[Allocation]{
+		Alignment:         alloc.alignment,
+		SuballocationType: alloc.suballocationType,
+		Flags:             flags,
+		Move: defrag.DefragmentationMove[Allocation]{
+			Size:             alloc.size,
+			SrcAllocation:    alloc,
+			SrcBlockMetadata: alloc.blockData.block.metadata,
+		},
+	}
+}
+
+func (l *memoryBlockList) SwapBlocks(left, right int) {
+	l.blocks[left], l.blocks[right] = l.blocks[right], l.blocks[left]
 }

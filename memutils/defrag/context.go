@@ -1,14 +1,34 @@
 package defrag
 
 import (
+	"errors"
 	"fmt"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"golang.org/x/exp/slog"
 	"math"
 )
+
+type Algorithm uint32
+
+const (
+	AlgorithmFast Algorithm = iota
+	AlgorithmBalanced
+	AlgorithmFull
+	AlgorithmExtensive
+)
+
+var algorithmMapping = map[Algorithm]string{
+	AlgorithmFast:      "AlgorithmFast",
+	AlgorithmBalanced:  "AlgorithmBalanced",
+	AlgorithmFull:      "AlgorithmFull",
+	AlgorithmExtensive: "AlgorithmExtensive",
+}
+
+func (a Algorithm) String() string {
+	return algorithmMapping[a]
+}
 
 type DefragmentationStats struct {
 	BytesMoved              int
@@ -17,110 +37,44 @@ type DefragmentationStats struct {
 	DeviceMemoryBlocksFreed int
 }
 
-type MetadataDefragContext struct {
-	logger *slog.Logger
+type MetadataDefragContext[T any] struct {
+	MaxPassBytes       int
+	MaxPassAllocations int
+	Algorithm          Algorithm
+	Handler            DefragmentOperationHandler[T]
 
-	maxPassBytes       int
-	maxPassAllocations int
-
-	moves []DefragmentationMove
-
+	moves         []DefragmentationMove[T]
 	ignoredAllocs int
-	algorithm     DefragmentationFlags
-	handler       DefragmentOperationHandler
 
-	singleBlockList     BlockList
-	blockLists          [common.MaxMemoryTypes]BlockList
-	balancedStates      [common.MaxMemoryTypes]stateBalanced
-	extensiveStates     [common.MaxMemoryTypes]stateExtensive
+	balancedStates      []stateBalanced[T]
+	extensiveStates     []stateExtensive
 	immovableBlockCount int
 
 	globalStats DefragmentationStats
 	passStats   DefragmentationStats
 }
 
-func (c *MetadataDefragContext) init(logger *slog.Logger, o *DefragmentationInfo) {
-	c.logger = logger
-	c.singleBlockList = nil
-	c.maxPassBytes = o.MaxBytesPerPass
-	c.maxPassAllocations = o.MaxAllocationsPerPass
-	if c.maxPassBytes == 0 {
-		c.maxPassBytes = -1
+func (c *MetadataDefragContext[T]) Init(blockListCount int) {
+	if c.MaxPassBytes == 0 {
+		c.MaxPassBytes = -1
 	}
-	if c.maxPassAllocations == 0 {
-		c.maxPassAllocations = math.MaxInt
+	if c.MaxPassAllocations == 0 {
+		c.MaxPassAllocations = math.MaxInt
 	}
-	c.algorithm = o.Flags & DefragmentationFlagAlgorithmMask
 
-	for i := 0; i < common.MaxMemoryTypes; i++ {
-		c.blockLists[i] = nil
+	c.balancedStates = make([]stateBalanced[T], blockListCount)
+	c.extensiveStates = make([]stateExtensive, blockListCount)
+	for i := 0; i < blockListCount; i++ {
 		c.balancedStates[i].AverageAllocSize = math.MaxInt
 		c.extensiveStates[i].FirstFreeBlock = math.MaxInt
 	}
 
-	if c.algorithm == 0 {
-		c.algorithm = DefragmentationFlagAlgorithmBalanced
+	if c.Algorithm == 0 {
+		c.Algorithm = AlgorithmBalanced
 	}
 }
 
-func (c *MetadataDefragContext) InitSingle(logger *slog.Logger, blockList BlockList, o DefragmentationInfo) {
-	c.init(logger, &o)
-
-	c.singleBlockList = blockList
-}
-
-func (c *MetadataDefragContext) InitMultiple(logger *slog.Logger, blockList [common.MaxMemoryTypes]BlockList, o DefragmentationInfo) {
-	c.init(logger, &o)
-
-	for i := 0; i < common.MaxMemoryTypes; i++ {
-		c.blockLists[i] = blockList[i]
-	}
-}
-
-func (c *MetadataDefragContext) ExecutePass() (common.VkResult, error) {
-	c.logger.Debug("MetadataDefragContext::ExecutePass")
-
-	var defaultBlockList BlockList
-
-	for i := 0; i < common.MaxMemoryTypes; i++ {
-		if c.blockLists[i] != nil {
-			defaultBlockList = c.blockLists[i]
-			break
-		}
-	}
-
-	if c.singleBlockList == nil && defaultBlockList == nil {
-		panic("could not find a non-nil memory block list")
-	}
-
-	if c.singleBlockList != nil {
-		return c.blockListExecutePass(0, c.singleBlockList)
-	}
-
-	var isIncomplete bool
-	var res common.VkResult
-	var err error
-	for i := 0; i < len(c.blockLists); i++ {
-		if c.blockLists[i] != nil {
-			res, err = c.blockListExecutePass(i, c.blockLists[i])
-			if err != nil {
-				return res, err
-			}
-
-			if res == core1_0.VKIncomplete {
-				isIncomplete = true
-			}
-		}
-	}
-
-	if isIncomplete {
-		return core1_0.VKIncomplete, nil
-	}
-
-	return core1_0.VKSuccess, nil
-}
-
-func (c *MetadataDefragContext) PopulateStats(stats *DefragmentationStats) {
+func (c *MetadataDefragContext[T]) PopulateStats(stats *DefragmentationStats) {
 	if stats == nil {
 		return
 	}
@@ -131,10 +85,10 @@ func (c *MetadataDefragContext) PopulateStats(stats *DefragmentationStats) {
 	stats.AllocationsMoved = c.globalStats.AllocationsMoved
 }
 
-func (c *MetadataDefragContext) blockListExecutePass(index int, blockList BlockList) (common.VkResult, error) {
-	c.blockListCollectMoves(index, blockList)
+func (c *MetadataDefragContext[T]) BlockListCompletePass(stateIndex int, blockList BlockList[T]) (bool, error) {
 	immovableBlocks := make(map[metadata.BlockMetadata]struct{}, blockList.BlockCount())
 
+	var allErrors []error
 	for i := 0; i < len(c.moves); i++ {
 		move := c.moves[i]
 
@@ -143,13 +97,17 @@ func (c *MetadataDefragContext) blockListExecutePass(index int, blockList BlockL
 		prevCount := stats.BlockCount
 		prevBytes := stats.BlockBytes
 
-		op := c.handler(move.SrcAllocation, move.DstTmpAllocation)
+		err := c.Handler(&move)
+		if err != nil {
+			allErrors = append(allErrors, err)
+			continue
+		}
 
 		blockList.AddStatistics(&stats)
 		c.passStats.DeviceMemoryBlocksFreed += prevCount - stats.BlockCount
 		c.passStats.BytesFreed += prevBytes - stats.BlockBytes
 
-		switch op {
+		switch move.MoveOperation {
 		case DefragmentationMoveIgnore:
 			c.passStats.BytesMoved -= move.Size
 			c.passStats.AllocationsMoved--
@@ -160,9 +118,9 @@ func (c *MetadataDefragContext) blockListExecutePass(index int, blockList BlockL
 			c.passStats.AllocationsMoved--
 		}
 
-		if c.algorithm == DefragmentationFlagAlgorithmExtensive {
+		if c.Algorithm == AlgorithmExtensive {
 			// Avoid unnecessary tries to allocate when new free block is available
-			state := &c.extensiveStates[index]
+			state := &c.extensiveStates[stateIndex]
 			if state.FirstFreeBlock != math.MaxInt {
 				diff := prevCount - stats.BlockCount
 				if state.FirstFreeBlock >= diff {
@@ -182,13 +140,12 @@ func (c *MetadataDefragContext) blockListExecutePass(index int, blockList BlockL
 	c.globalStats.BytesMoved += c.passStats.BytesMoved
 	c.globalStats.DeviceMemoryBlocksFreed += c.passStats.BytesMoved
 	c.passStats = DefragmentationStats{}
-	c.ignoredAllocs = 0
 
 	// Move blocks iwth immovable allocations according to algorithm
 	swappedFreeBlocks := true
 	if len(immovableBlocks) > 0 {
-		if c.algorithm == DefragmentationFlagAlgorithmExtensive {
-			state := c.extensiveStates[index]
+		if c.Algorithm == AlgorithmExtensive {
+			state := c.extensiveStates[stateIndex]
 
 			if state.Operation != defragmentOperationCleanup {
 				for blockMetadata := range immovableBlocks {
@@ -207,15 +164,22 @@ func (c *MetadataDefragContext) blockListExecutePass(index int, blockList BlockL
 		}
 	}
 
-	if len(c.moves) > 0 || swappedFreeBlocks {
-		c.moves = c.moves[:0]
-		return core1_0.VKIncomplete, nil
+	var outError error
+	if len(allErrors) == 1 {
+		outError = allErrors[0]
+	} else if len(allErrors) > 0 {
+		outError = errors.Join(allErrors...)
 	}
 
-	return core1_0.VKSuccess, nil
+	if len(c.moves) > 0 || swappedFreeBlocks || outError != nil {
+		c.moves = c.moves[:0]
+		return false, outError
+	}
+
+	return true, nil
 }
 
-func (c *MetadataDefragContext) swapImmovableBlocks(blockList BlockList, mtdata metadata.BlockMetadata) {
+func (c *MetadataDefragContext[T]) swapImmovableBlocks(blockList BlockList[T], mtdata metadata.BlockMetadata) {
 	blockList.Lock()
 	defer blockList.Unlock()
 
@@ -227,7 +191,7 @@ func (c *MetadataDefragContext) swapImmovableBlocks(blockList BlockList, mtdata 
 	}
 }
 
-func (c *MetadataDefragContext) swapFreeImmovableBlocks(blockList BlockList, state *stateExtensive, mtdata metadata.BlockMetadata) bool {
+func (c *MetadataDefragContext[T]) swapFreeImmovableBlocks(blockList BlockList[T], state *stateExtensive, mtdata metadata.BlockMetadata) bool {
 	blockList.Lock()
 	defer blockList.Unlock()
 
@@ -251,7 +215,7 @@ func (c *MetadataDefragContext) swapFreeImmovableBlocks(blockList BlockList, sta
 	return false
 }
 
-func (c *MetadataDefragContext) blockListCollectMoves(index int, blockList BlockList) {
+func (c *MetadataDefragContext[T]) BlockListCollectMoves(stateIndex int, blockList BlockList[T]) {
 	if blockList == nil {
 		panic("attempted to begin pass with a nil blockList")
 	}
@@ -260,13 +224,17 @@ func (c *MetadataDefragContext) blockListCollectMoves(index int, blockList Block
 	defer blockList.Unlock()
 
 	if blockList.BlockCount() > 1 {
-		c.computeDefragmentation(blockList, index)
+		c.computeDefragmentation(blockList, stateIndex)
 	} else if blockList.BlockCount() == 1 {
-		c.reallocWithinBlock(blockList, index, blockList.MetadataForBlock(0))
+		c.reallocWithinBlock(blockList, 0, blockList.MetadataForBlock(0))
 	}
 }
 
-func (c *MetadataDefragContext) mustBeginAllocationList(mtdata metadata.BlockMetadata) metadata.BlockAllocationHandle {
+func (c *MetadataDefragContext[T]) Moves() []DefragmentationMove[T] {
+	return c.moves
+}
+
+func (c *MetadataDefragContext[T]) mustBeginAllocationList(mtdata metadata.BlockMetadata) metadata.BlockAllocationHandle {
 	handle, err := mtdata.AllocationListBegin()
 	if err != nil {
 		panic(fmt.Sprintf("unexpected error when getting first allocation: %+v", err))
@@ -275,7 +243,7 @@ func (c *MetadataDefragContext) mustBeginAllocationList(mtdata metadata.BlockMet
 	return handle
 }
 
-func (c *MetadataDefragContext) mustFindNextAllocation(mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle) metadata.BlockAllocationHandle {
+func (c *MetadataDefragContext[T]) mustFindNextAllocation(mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle) metadata.BlockAllocationHandle {
 	handle, err := mtdata.FindNextAllocation(handle)
 	if err != nil {
 		panic(fmt.Sprintf("unexpected error when getting next allocation: %+v", err))
@@ -284,7 +252,7 @@ func (c *MetadataDefragContext) mustFindNextAllocation(mtdata metadata.BlockMeta
 	return handle
 }
 
-func (c *MetadataDefragContext) mustFindNextFreeRegionSize(mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle) int {
+func (c *MetadataDefragContext[T]) mustFindNextFreeRegionSize(mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle) int {
 	size, err := mtdata.FindNextFreeRegionSize(handle)
 	if err != nil {
 		panic(fmt.Sprintf("unexpected error when getting next free region size: %+v", err))
@@ -293,7 +261,7 @@ func (c *MetadataDefragContext) mustFindNextFreeRegionSize(mtdata metadata.Block
 	return size
 }
 
-func (c *MetadataDefragContext) mustFindOffset(mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle) int {
+func (c *MetadataDefragContext[T]) mustFindOffset(mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle) int {
 	offset, err := mtdata.AllocationOffset(handle)
 	if err != nil {
 		panic(fmt.Sprintf("unexpected error when getting allocation offset: %+v", err))
@@ -302,40 +270,44 @@ func (c *MetadataDefragContext) mustFindOffset(mtdata metadata.BlockMetadata, ha
 	return offset
 }
 
-func (c *MetadataDefragContext) getMoveData(blockList BlockList, handle metadata.BlockAllocationHandle, mtdata metadata.BlockMetadata) moveAllocationData {
+func (c *MetadataDefragContext[T]) getMoveData(blockList BlockList[T], handle metadata.BlockAllocationHandle, mtdata metadata.BlockMetadata) (MoveAllocationData[T], bool) {
 	userData, err := mtdata.AllocationUserData(handle)
 	if err != nil {
 		panic(fmt.Sprintf("unexpected error when retrieving allocation user data: %+v", err))
 	}
 
-	moveData := blockList.MoveDataForUserData(userData)
-	moveData.Move.SrcBlockMetadata = mtdata
-	return moveData
+	if userData == c {
+		return MoveAllocationData[T]{}, true
+	}
+
+	return blockList.MoveDataForUserData(userData), false
 }
 
 const defragMaxAllocsToIgnore = 16
 
-func (c *MetadataDefragContext) checkCounters(bytes int) defragCounterStatus {
+func (c *MetadataDefragContext[T]) checkCounters(bytes int) defragCounterStatus {
 	// Ignore allocation if it will exceed max size for copy
-	if c.passStats.BytesMoved+bytes > c.maxPassBytes {
+	if c.passStats.BytesMoved+bytes > c.MaxPassBytes {
 		c.ignoredAllocs++
 		if c.ignoredAllocs < defragMaxAllocsToIgnore {
 			return defragCounterIgnore
 		} else {
 			return defragCounterEnd
 		}
+	} else {
+		c.ignoredAllocs = 0
 	}
 
 	return defragCounterPass
 }
 
-func (c *MetadataDefragContext) incrementCounters(bytes int) bool {
+func (c *MetadataDefragContext[T]) incrementCounters(bytes int) bool {
 	c.passStats.BytesMoved += bytes
 	c.passStats.AllocationsMoved++
 
 	// Early return when max found
-	if c.passStats.AllocationsMoved >= c.maxPassAllocations || c.passStats.BytesMoved >= c.maxPassBytes {
-		if c.passStats.AllocationsMoved != c.maxPassAllocations && c.passStats.BytesMoved != c.maxPassBytes {
+	if c.passStats.AllocationsMoved >= c.MaxPassAllocations || c.passStats.BytesMoved >= c.MaxPassBytes {
+		if c.passStats.AllocationsMoved != c.MaxPassAllocations && c.passStats.BytesMoved != c.MaxPassBytes {
 			panic(fmt.Sprintf("somehow excited maximum pass thresholds: bytes %d, allocs %d", c.passStats.BytesMoved, c.passStats.AllocationsMoved))
 		}
 
@@ -345,7 +317,7 @@ func (c *MetadataDefragContext) incrementCounters(bytes int) bool {
 	return false
 }
 
-func (c *MetadataDefragContext) allocFromBlock(blockList BlockList, blockIndex int, mtData metadata.BlockMetadata, size int, alignment uint, flags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *any) (common.VkResult, error) {
+func (c *MetadataDefragContext[T]) allocFromBlock(blockList BlockList[T], blockIndex int, mtData metadata.BlockMetadata, size int, alignment uint, flags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *T) (common.VkResult, error) {
 	isUpperAddress := flags&memutils.AllocationCreateUpperAddress != 0
 
 	var currRequest metadata.AllocationRequest
@@ -356,10 +328,10 @@ func (c *MetadataDefragContext) allocFromBlock(blockList BlockList, blockIndex i
 		return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
 	}
 
-	return blockList.CommitAllocationRequest(&currRequest, blockIndex, alignment, flags, userData, suballocType, outAlloc)
+	return blockList.CommitDefragAllocationRequest(&currRequest, blockIndex, alignment, flags, userData, suballocType, outAlloc)
 }
 
-func (c *MetadataDefragContext) allocInOtherBlock(start, end int, data *moveAllocationData, blockList BlockList) bool {
+func (c *MetadataDefragContext[T]) allocInOtherBlock(start, end int, data *MoveAllocationData[T], blockList BlockList[T]) bool {
 	for ; start < end; start++ {
 		dstMetadata := blockList.MetadataForBlock(start)
 		if dstMetadata.SumFreeSize() >= data.Move.Size {
@@ -386,13 +358,11 @@ func (c *MetadataDefragContext) allocInOtherBlock(start, end int, data *moveAllo
 	return false
 }
 
-func (c *MetadataDefragContext) walkSuballocations(blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata,
-	suballocHandler func(blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *moveAllocationData) bool) bool {
+func (c *MetadataDefragContext[T]) walkSuballocations(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata,
+	suballocHandler func(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool) bool {
 	for handle := c.mustBeginAllocationList(mtdata); handle != metadata.NoAllocation; handle = c.mustFindNextAllocation(mtdata, handle) {
-		moveData := c.getMoveData(blockList, handle, mtdata)
-
-		// Ignore newly-created allocations by defragmentation algorithm
-		if moveData.Move.SrcAllocation == c {
+		moveData, immobile := c.getMoveData(blockList, handle, mtdata)
+		if immobile {
 			continue
 		}
 
@@ -416,7 +386,7 @@ func (c *MetadataDefragContext) walkSuballocations(blockList BlockList, blockInd
 	return false
 }
 
-func (c *MetadataDefragContext) allocIfLowerOffset(offset int, blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *moveAllocationData) bool {
+func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
 	var allocRequest metadata.AllocationRequest
 	success, err := mtdata.PopulateAllocationRequest(
 		moveData.Move.Size,
@@ -431,7 +401,7 @@ func (c *MetadataDefragContext) allocIfLowerOffset(offset int, blockList BlockLi
 	}
 
 	if success && c.mustFindOffset(mtdata, handle) < offset {
-		res, err := blockList.CommitAllocationRequest(
+		res, err := blockList.CommitDefragAllocationRequest(
 			&allocRequest,
 			blockIndex,
 			moveData.Alignment,
@@ -454,7 +424,7 @@ func (c *MetadataDefragContext) allocIfLowerOffset(offset int, blockList BlockLi
 	return false
 }
 
-func (c *MetadataDefragContext) reallocSuballocHandler(blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *moveAllocationData) bool {
+func (c *MetadataDefragContext[T]) reallocSuballocHandler(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
 	offset := c.mustFindOffset(mtdata, handle)
 	if offset != 0 && mtdata.SumFreeSize() >= moveData.Move.Size {
 		return c.allocIfLowerOffset(offset, blockList, blockIndex, mtdata, handle, moveData)
@@ -463,17 +433,17 @@ func (c *MetadataDefragContext) reallocSuballocHandler(blockList BlockList, bloc
 	return false
 }
 
-func (c *MetadataDefragContext) reallocWithinBlock(blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata) bool {
+func (c *MetadataDefragContext[T]) reallocWithinBlock(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata) bool {
 	return c.walkSuballocations(blockList, blockIndex, mtdata, c.reallocSuballocHandler)
 }
 
-func (c *MetadataDefragContext) moveDataToFreeBlocks(currentType metadata.SuballocationType, blockList BlockList, firstFreeBlock int) (texturePresent, bufferPresent, otherPresent, success bool) {
+func (c *MetadataDefragContext[T]) moveDataToFreeBlocks(currentType metadata.SuballocationType, blockList BlockList[T], firstFreeBlock int) (texturePresent, bufferPresent, otherPresent, success bool) {
 	prevMoveCount := len(c.moves)
 	for i := firstFreeBlock - 1; i > 0; i-- {
 		mtdata := blockList.MetadataForBlock(i)
 
 		allocSuccess := c.walkSuballocations(blockList, i, mtdata,
-			func(blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *moveAllocationData) bool {
+			func(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
 				// Move only single type of resources at once
 				if !metadata.IsBufferImageGranularityConflict(moveData.SuballocationType, currentType) {
 					// Try to fit allocation into free blocks
@@ -501,26 +471,26 @@ func (c *MetadataDefragContext) moveDataToFreeBlocks(currentType metadata.Suball
 	return texturePresent, bufferPresent, otherPresent, prevMoveCount == len(c.moves)
 }
 
-func (c *MetadataDefragContext) computeDefragmentation(blockList BlockList, index int) bool {
-	switch c.algorithm {
-	case DefragmentationFlagAlgorithmFast:
+func (c *MetadataDefragContext[T]) computeDefragmentation(blockList BlockList[T], stateIndex int) bool {
+	switch c.Algorithm {
+	case AlgorithmFast:
 		return c.computeDefragmentationFast(blockList)
-	case DefragmentationFlagAlgorithmBalanced:
-		return c.computeDefragmentationBalanced(blockList, index, true)
-	case DefragmentationFlagAlgorithmFull:
+	case AlgorithmBalanced:
+		return c.computeDefragmentationBalanced(blockList, stateIndex, true)
+	case AlgorithmFull:
 		return c.computeDefragmentationFull(blockList)
-	case DefragmentationFlagAlgorithmExtensive:
-		return c.computeDefragemntationExtensive(blockList, index)
+	case AlgorithmExtensive:
+		return c.computeDefragemntationExtensive(blockList, stateIndex)
 	default:
-		panic(fmt.Sprintf("attempted to defragment with unknown algorithm: %s", c.algorithm.String()))
+		panic(fmt.Sprintf("attempted to defragment with unknown algorithm: %s", c.Algorithm.String()))
 	}
 }
 
-func (c *MetadataDefragContext) defragFastSuballocHandler(blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *moveAllocationData) bool {
+func (c *MetadataDefragContext[T]) defragFastSuballocHandler(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
 	return c.allocInOtherBlock(0, blockIndex, moveData, blockList)
 }
 
-func (c *MetadataDefragContext) computeDefragmentationFast(blockList BlockList) bool {
+func (c *MetadataDefragContext[T]) computeDefragmentationFast(blockList BlockList[T]) bool {
 	// Move only between blocks
 
 	// Go through allocation in last blocks and try to fit them inside first ones
@@ -535,12 +505,12 @@ func (c *MetadataDefragContext) computeDefragmentationFast(blockList BlockList) 
 	return false
 }
 
-func (c *MetadataDefragContext) computeDefragmentationBalanced(blockList BlockList, index int, update bool) bool {
+func (c *MetadataDefragContext[T]) computeDefragmentationBalanced(blockList BlockList[T], stateIndex int, update bool) bool {
 	// Go over every allocation and try to fit it in previous blocks at lowest offsets,
 	// if not possible: realloc within single block to minimize offset (exclude offset == 0),
 	// but only if there are noticeable gaps between them
 
-	state := &c.balancedStates[index]
+	state := &c.balancedStates[stateIndex]
 	if update && state.AverageAllocSize == math.MaxInt {
 		state.UpdateStatistics(blockList)
 	}
@@ -554,7 +524,7 @@ func (c *MetadataDefragContext) computeDefragmentationBalanced(blockList BlockLi
 		var prevFreeRegionSize int
 
 		c.walkSuballocations(blockList, i, mtdata,
-			func(blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *moveAllocationData) bool {
+			func(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
 				// Check all previous blocks for free space
 				prevMoveCount := len(c.moves)
 				if c.allocInOtherBlock(0, i, moveData, blockList) {
@@ -586,13 +556,13 @@ func (c *MetadataDefragContext) computeDefragmentationBalanced(blockList BlockLi
 	// No moves performed, update statistics to current state
 	if startMoveCount == len(c.moves) && !update {
 		state.AverageAllocSize = math.MaxInt
-		return c.computeDefragmentationBalanced(blockList, index, false)
+		return c.computeDefragmentationBalanced(blockList, stateIndex, false)
 	}
 
 	return false
 }
 
-func (c *MetadataDefragContext) defragFullSuballocHandler(blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *moveAllocationData) bool {
+func (c *MetadataDefragContext[T]) defragFullSuballocHandler(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
 	// Check all previous blocks for free space
 	prevMoveCount := len(c.moves)
 	if c.allocInOtherBlock(0, blockIndex, moveData, blockList) {
@@ -613,7 +583,7 @@ func (c *MetadataDefragContext) defragFullSuballocHandler(blockList BlockList, b
 	return false
 }
 
-func (c *MetadataDefragContext) computeDefragmentationFull(blockList BlockList) bool {
+func (c *MetadataDefragContext[T]) computeDefragmentationFull(blockList BlockList[T]) bool {
 	// Go over every allocation and try to fit it in previous blocks at lowest offsets,
 	// if not possible: realloc within single block to minimize offset (exclude offset == 0)
 
@@ -628,7 +598,7 @@ func (c *MetadataDefragContext) computeDefragmentationFull(blockList BlockList) 
 	return false
 }
 
-func (c *MetadataDefragContext) computeDefragemntationExtensive(blockList BlockList, index int) bool {
+func (c *MetadataDefragContext[T]) computeDefragemntationExtensive(blockList BlockList[T], stateIndex int) bool {
 	// FIrst free single block, then populate it to the brim, then free another block, and so on
 
 	//Fallback to previous algorithm since without granularity conflicts it can achieve max packing
@@ -636,7 +606,7 @@ func (c *MetadataDefragContext) computeDefragemntationExtensive(blockList BlockL
 		return c.computeDefragmentationFull(blockList)
 	}
 
-	state := &c.extensiveStates[index]
+	state := &c.extensiveStates[stateIndex]
 
 	switch state.Operation {
 	case defragmentOperationDone:
@@ -658,7 +628,7 @@ func (c *MetadataDefragContext) computeDefragemntationExtensive(blockList BlockL
 
 		prevMoveCount := len(c.moves)
 		complete := c.walkSuballocations(blockList, last, freeMetadata,
-			func(blockList BlockList, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *moveAllocationData) bool {
+			func(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
 				if c.allocInOtherBlock(0, last, moveData, blockList) {
 					if prevMoveCount != len(c.moves) && c.mustFindNextAllocation(mtdata, handle) == metadata.NoAllocation {
 						state.FirstFreeBlock = last
@@ -702,7 +672,7 @@ func (c *MetadataDefragContext) computeDefragemntationExtensive(blockList BlockL
 			}
 			state.FirstFreeBlock = last
 			// Nothing done, block found without reallocations, can perform another realloc in same pass
-			return c.computeDefragemntationExtensive(blockList, index)
+			return c.computeDefragemntationExtensive(blockList, stateIndex)
 		}
 	case defragmentOperationMoveTextures:
 		texturePresent, bufferPresent, otherPresent, success := c.moveDataToFreeBlocks(metadata.SuballocationImageOptimal, blockList, state.FirstFreeBlock)
@@ -712,7 +682,7 @@ func (c *MetadataDefragContext) computeDefragemntationExtensive(blockList BlockL
 
 		if texturePresent {
 			state.Operation = defragmentOperationFindFreeBlockTexture
-			return c.computeDefragemntationExtensive(blockList, index)
+			return c.computeDefragemntationExtensive(blockList, stateIndex)
 		}
 
 		if !bufferPresent && !otherPresent {
@@ -731,7 +701,7 @@ func (c *MetadataDefragContext) computeDefragemntationExtensive(blockList BlockL
 
 		if bufferPresent {
 			state.Operation = defragmentOperationFindFreeBlockBuffer
-			return c.computeDefragemntationExtensive(blockList, index)
+			return c.computeDefragemntationExtensive(blockList, stateIndex)
 		}
 
 		if !otherPresent {
@@ -747,7 +717,7 @@ func (c *MetadataDefragContext) computeDefragemntationExtensive(blockList BlockL
 		if success {
 			if otherPresent {
 				state.Operation = defragmentOperationFindFreeBlockBuffer
-				return c.computeDefragemntationExtensive(blockList, index)
+				return c.computeDefragemntationExtensive(blockList, stateIndex)
 			}
 
 			// Everything moved

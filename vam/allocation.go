@@ -67,6 +67,7 @@ type Allocation struct {
 	memoryTypeIndex   int
 	allocationType    allocationType
 	suballocationType metadata.SuballocationType
+	mapCount          int
 	memory            *vulkan.SynchronizedMemory
 
 	parentAllocator *Allocator
@@ -183,17 +184,6 @@ func (a *Allocation) MemoryType() core1_0.MemoryType {
 	return a.parentAllocator.deviceMemory.MemoryTypeProperties(a.memoryTypeIndex)
 }
 
-func (a *Allocation) mappedData() (unsafe.Pointer, error) {
-	ptr := a.memory.MappedData()
-	if ptr == nil {
-		return nil, nil
-	}
-
-	offset := a.FindOffset()
-
-	return unsafe.Add(ptr, offset), nil
-}
-
 func (a *Allocation) FindOffset() int {
 	a.parentAllocator.logger.Debug("Allocation::FindOffset")
 
@@ -216,6 +206,7 @@ func (a *Allocation) Map() (unsafe.Pointer, common.VkResult, error) {
 		return nil, core1_0.VKErrorMemoryMapFailed, errors.New("attempted to perform a map for an allocation that does not permit mapping")
 	}
 
+	a.mapCount++
 	ptr, res, err := a.memory.Map(1, 0, -1, 0)
 	if err != nil || ptr == nil {
 		return ptr, res, err
@@ -229,6 +220,7 @@ func (a *Allocation) Map() (unsafe.Pointer, common.VkResult, error) {
 func (a *Allocation) Unmap() error {
 	a.parentAllocator.logger.Debug("Allocation::Unmap")
 
+	a.mapCount--
 	return a.memory.Unmap(1)
 }
 
@@ -432,4 +424,33 @@ func (a *Allocation) Free() error {
 	return a.parentAllocator.multiFreeMemory(
 		allocSlice,
 	)
+}
+
+func (a *Allocation) swapBlockAllocation(alloc *Allocation) (int, error) {
+	if alloc == nil {
+		panic("tried to swap blocks with a nil allocation")
+	} else if a.allocationType != allocationTypeBlock {
+		panic("tried to swap blocks but this is not a block allocation")
+	} else if alloc.allocationType != allocationTypeBlock {
+		panic(fmt.Sprintf("tried to swap blocks with a non-block allocation: %s", alloc.allocationType.String()))
+	}
+
+	if a.mapCount != 0 {
+		err := a.memory.Unmap(a.mapCount)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	err := a.blockData.block.metadata.SetAllocationUserData(a.blockData.handle, alloc)
+	if err != nil {
+		panic(fmt.Sprintf("unexpected error when attempting to set current metadata during block swap: %+v", err))
+	}
+	a.blockData, alloc.blockData = alloc.blockData, a.blockData
+	err = a.blockData.block.metadata.SetAllocationUserData(a.blockData.handle, a)
+	if err != nil {
+		panic(fmt.Sprintf("unexpected error when attempting to set new metadata during block swap: %+v", err))
+	}
+
+	return a.mapCount, nil
 }
