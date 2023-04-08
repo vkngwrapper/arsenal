@@ -186,13 +186,13 @@ func (c *DefragmentationContext) completePassForMove(move *defrag.Defragmentatio
 			}
 		}
 	case defrag.DefragmentationMoveDestroy:
-		err := move.SrcAllocation.Free()
+		err := move.SrcAllocation.free()
 		if err != nil {
 			panic(fmt.Sprintf("failed to free source allocation on Destroy move: %+v", err))
 		}
 	}
 
-	err := move.DstTmpAllocation.Free()
+	err := move.DstTmpAllocation.free()
 	if err != nil {
 		panic(fmt.Sprintf("failed to free temporary defrag allocation: %+v", err))
 	}

@@ -1153,3 +1153,176 @@ func (a *Allocator) BeginDefragmentation(o DefragmentationInfo, defragContext *D
 
 	return core1_0.VKSuccess, nil
 }
+
+func (a *Allocator) CreateBuffer(bufferInfo core1_0.BufferCreateInfo, allocInfo AllocationCreateInfo, outAlloc *Allocation) (core1_0.Buffer, common.VkResult, error) {
+	a.logger.Debug("Allocator::CreateBuffer")
+
+	if outAlloc == nil {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
+	}
+
+	return a.createBuffer(&bufferInfo, &allocInfo, 0, outAlloc)
+}
+
+func (a *Allocator) CreateBufferWithAlignment(bufferInfo core1_0.BufferCreateInfo, allocInfo AllocationCreateInfo, minAlignment int, outAlloc *Allocation) (core1_0.Buffer, common.VkResult, error) {
+	a.logger.Debug("Allocator::CreateBufferWithAlignment")
+
+	if outAlloc == nil {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
+	}
+
+	err := memutils.CheckPow2(minAlignment, "minAlignment")
+	if err != nil {
+		return nil, core1_0.VKErrorUnknown, err
+	}
+
+	return a.createBuffer(&bufferInfo, &allocInfo, minAlignment, outAlloc)
+}
+
+func (a *Allocator) createBuffer(bufferInfo *core1_0.BufferCreateInfo, allocationInfo *AllocationCreateInfo, minAlignment int, outAlloc *Allocation) (buffer core1_0.Buffer, res common.VkResult, err error) {
+
+	if bufferInfo == nil {
+		panic("nil bufferInfo")
+	}
+	if allocationInfo == nil {
+		panic("nil allocationInfo")
+	}
+	if outAlloc == nil {
+		panic("nil outAlloc")
+	}
+
+	if bufferInfo.Size == 0 {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate a 0-sized buffer")
+	} else if bufferInfo.Usage&khr_buffer_device_address.BufferUsageShaderDeviceAddress != 0 && a.extensionData.BufferDeviceAddress == nil {
+		return nil, core1_0.VKErrorExtensionNotPresent, errors.New("attempted to use BufferUsageShaderDeviceAddress, but khr_buffer_device_address is not loaded")
+	}
+
+	buffer, res, err = a.device.CreateBuffer(
+		a.allocationCallbacks,
+		*bufferInfo,
+	)
+	if err != nil {
+		return nil, res, err
+	}
+	defer func() {
+		if err != nil {
+			buffer.Destroy(a.allocationCallbacks)
+		}
+	}()
+
+	var memReqs core1_0.MemoryRequirements
+	requiresDedicated, prefersDedicated, err := a.getBufferMemoryRequirements(buffer, &memReqs)
+	if err != nil {
+		return buffer, core1_0.VKErrorUnknown, err
+	}
+
+	if minAlignment > memReqs.Alignment {
+		memReqs.Alignment = minAlignment
+	}
+
+	bufferOrImage := uint32(bufferInfo.Usage)
+
+	// Attempt to create a one-length slice for the provided alloc pointer
+	outAllocSlice := unsafe.Slice(outAlloc, 1)
+	res, err = a.multiAllocateMemory(
+		&memReqs,
+		requiresDedicated,
+		prefersDedicated,
+		buffer,
+		nil,
+		&bufferOrImage,
+		allocationInfo,
+		metadata.SuballocationBuffer,
+		outAllocSlice,
+	)
+	if err != nil {
+		return buffer, res, err
+	}
+	defer func() {
+		if err != nil {
+			freeErr := outAlloc.free()
+			if freeErr != nil {
+				a.logger.Error("failed to free temporary alloc after error", slog.Any("error", freeErr))
+			}
+		}
+	}()
+
+	if allocationInfo.Flags&memutils.AllocationCreateDontBind == 0 {
+		res, err = outAlloc.BindBufferMemory(buffer)
+	}
+
+	return buffer, res, err
+}
+
+func (a *Allocator) CreateImage(imageInfo core1_0.ImageCreateInfo, allocInfo AllocationCreateInfo, outAlloc *Allocation) (image core1_0.Image, res common.VkResult, err error) {
+	a.logger.Debug("Allocator::CreateImage")
+
+	if outAlloc == nil {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
+	}
+
+	if imageInfo.Extent.Width == 0 ||
+		imageInfo.Extent.Height == 0 {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create a 0-sized image")
+	} else if imageInfo.Extent.Depth == 0 {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create a 0-depth image")
+	} else if imageInfo.MipLevels == 0 {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 mip levels")
+	} else if imageInfo.ArrayLayers == 0 {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 array layers")
+	}
+
+	image, res, err = a.device.CreateImage(a.allocationCallbacks, imageInfo)
+	if err != nil {
+		return image, res, err
+	}
+	defer func() {
+		if err != nil {
+			image.Destroy(a.allocationCallbacks)
+		}
+	}()
+
+	suballocation := metadata.SuballocationImageLinear
+	if imageInfo.Tiling == core1_0.ImageTilingOptimal {
+		suballocation = metadata.SuballocationImageOptimal
+	}
+
+	var memReqs core1_0.MemoryRequirements
+	requiresDedicated, prefersDedicated, err := a.getImageMemoryRequirements(image, &memReqs)
+	if err != nil {
+		return image, core1_0.VKErrorUnknown, err
+	}
+
+	bufferOrImage := uint32(imageInfo.Usage)
+
+	// Attempt to create a one-length slice for the provided alloc pointer
+	outAllocSlice := unsafe.Slice(outAlloc, 1)
+	res, err = a.multiAllocateMemory(
+		&memReqs,
+		requiresDedicated,
+		prefersDedicated,
+		nil,
+		image,
+		&bufferOrImage,
+		&allocInfo,
+		suballocation,
+		outAllocSlice,
+	)
+	if err != nil {
+		return image, res, err
+	}
+	defer func() {
+		if err != nil {
+			freeErr := outAlloc.free()
+			if freeErr != nil {
+				a.logger.Error("failed to free temporary alloc after error", slog.Any("error", freeErr))
+			}
+		}
+	}()
+
+	if allocInfo.Flags&memutils.AllocationCreateDontBind == 0 {
+		res, err = outAlloc.BindImageMemory(image)
+	}
+
+	return image, res, err
+}
