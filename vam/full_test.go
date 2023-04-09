@@ -129,8 +129,7 @@ func BenchmarkCreateAllocationSlice(b *testing.B) {
 	}()
 
 	slice := make([]Allocation, 100)
-
-	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		memReqs := core1_0.MemoryRequirements{
 			Size:           100000,

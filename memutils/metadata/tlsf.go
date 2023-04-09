@@ -3,6 +3,7 @@ package metadata
 import (
 	"fmt"
 	"github.com/cockroachdb/errors"
+	"github.com/dolthub/swiss"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
@@ -64,7 +65,7 @@ type TLSFBlockMetadata struct {
 	innerIsFreeBitmap [MaxMemoryClasses]uint32
 
 	nextAllocationHandle BlockAllocationHandle
-	handleKey            map[BlockAllocationHandle]*tlsfBlock
+	handleKey            *swiss.Map[BlockAllocationHandle, *tlsfBlock]
 	freeList             []*tlsfBlock
 	nullBlock            *tlsfBlock
 	granularityHandler   BlockBufferImageGranularity
@@ -92,17 +93,17 @@ func (m *TLSFBlockMetadata) allocateBlock() *tlsfBlock {
 	b.prevFree = nil
 	b.userData = nil
 	b.blockHandle = BlockAllocationHandle(atomic.AddUint64((*uint64)(&m.nextAllocationHandle), 1))
-	m.handleKey[b.blockHandle] = b
+	m.handleKey.Put(b.blockHandle, b)
 	return b
 }
 
 func (m *TLSFBlockMetadata) freeBlock(b *tlsfBlock) {
-	delete(m.handleKey, b.blockHandle)
+	m.handleKey.Delete(b.blockHandle)
 	blockAllocator.Put(b)
 }
 
 func (m *TLSFBlockMetadata) getBlock(handle BlockAllocationHandle) (*tlsfBlock, error) {
-	block, ok := m.handleKey[handle]
+	block, ok := m.handleKey.Get(handle)
 	if !ok {
 		return nil, errors.New("received a handle that was incompatible with this metadata")
 	}
@@ -111,7 +112,7 @@ func (m *TLSFBlockMetadata) getBlock(handle BlockAllocationHandle) (*tlsfBlock, 
 
 func (m *TLSFBlockMetadata) Init(size int) {
 	m.BlockMetadataBase.Init(size)
-	m.handleKey = make(map[BlockAllocationHandle]*tlsfBlock)
+	m.handleKey = swiss.NewMap[BlockAllocationHandle, *tlsfBlock](600)
 
 	if !m.isVirtual {
 		m.granularityHandler.Init(size)
