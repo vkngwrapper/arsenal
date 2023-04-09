@@ -3,7 +3,7 @@ package vam
 import (
 	"github.com/cockroachdb/errors"
 	"github.com/vkngwrapper/core/v2/common"
-	"go.uber.org/zap"
+	"golang.org/x/exp/slog"
 )
 
 type PoolCreateInfo struct {
@@ -20,7 +20,7 @@ type PoolCreateInfo struct {
 }
 
 type Pool struct {
-	logger               *zap.Logger
+	logger               *slog.Logger
 	blockList            memoryBlockList
 	dedicatedAllocations dedicatedAllocationList
 	parentAllocator      *Allocator

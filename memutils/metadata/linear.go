@@ -7,7 +7,7 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"go.uber.org/zap"
+	"golang.org/x/exp/slog"
 	"math"
 	"sort"
 	"unsafe"
@@ -376,28 +376,29 @@ func (m *LinearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) e
 	return nil
 }
 
-func (m *LinearBlockMetadata) PopulateAllocationRequest(
+func (m *LinearBlockMetadata) CreateAllocationRequest(
 	allocSize int, allocAlignment uint,
 	upperAddress bool,
 	allocType SuballocationType,
 	strategy memutils.AllocationCreateFlags,
-	allocRequest *AllocationRequest,
-) (bool, error) {
+) (bool, AllocationRequest, error) {
 	if allocSize <= 0 {
-		return false, errors.New("allocation size must be greater than 0")
+		return false, AllocationRequest{}, errors.New("allocation size must be greater than 0")
 	}
 	if allocType == SuballocationFree {
-		return false, errors.New("allocation type cannot be SuballocationFree")
-	}
-	if allocRequest == nil {
-		return false, errors.New("allocation request must be a pointer to a valid struct")
-	}
-	allocRequest.Size = allocSize
-	if upperAddress {
-		return m.populateAllocationRequestUpper(allocSize, allocAlignment, allocType, allocRequest)
+		return false, AllocationRequest{}, errors.New("allocation type cannot be SuballocationFree")
 	}
 
-	return m.populateAllocationRequestLower(allocSize, allocAlignment, allocType, allocRequest), nil
+	allocRequest := AllocationRequest{
+		Size: allocSize,
+	}
+	if upperAddress {
+		success, err := m.populateAllocationRequestUpper(allocSize, allocAlignment, allocType, &allocRequest)
+		return success, allocRequest, err
+	}
+
+	success := m.populateAllocationRequestLower(allocSize, allocAlignment, allocType, &allocRequest)
+	return success, allocRequest, nil
 }
 
 func (m *LinearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.VkResult, error) {
@@ -425,7 +426,7 @@ func (m *LinearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.
 	return core1_0.VKSuccess, nil
 }
 
-func (m *LinearBlockMetadata) Alloc(req *AllocationRequest, allocType SuballocationType, userData any) error {
+func (m *LinearBlockMetadata) Alloc(req AllocationRequest, allocType SuballocationType, userData any) error {
 	offset := int(req.BlockAllocationHandle) - 1
 	newSuballoc := Suballocation{
 		Offset:   offset,
@@ -615,7 +616,7 @@ func (m *LinearBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationH
 	return nil
 }
 
-func (m *LinearBlockMetadata) DebugLogAllAllocations(log *zap.Logger, logFunc func(log *zap.Logger, offset int, size int, userData any)) {
+func (m *LinearBlockMetadata) DebugLogAllAllocations(log *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any)) {
 	firstVector := *m.accessSuballocationsFirst()
 	for i := m.firstNullItemsBeginCount; i < len(firstVector); i++ {
 		suballoc := firstVector[i]

@@ -14,12 +14,18 @@ import (
 	"github.com/vkngwrapper/core/v2/core1_1"
 	"github.com/vkngwrapper/core/v2/core1_2"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
-	"go.uber.org/zap"
+	"golang.org/x/exp/slog"
 	"sort"
 	"strconv"
 	"sync"
 	"unsafe"
 )
+
+var blockPool = sync.Pool{
+	New: func() any {
+		return &deviceMemoryBlock{}
+	},
+}
 
 type memoryBlockList struct {
 	allocOptions    common.Options
@@ -27,7 +33,7 @@ type memoryBlockList struct {
 	parentAllocator *Allocator
 	parentPool      *Pool
 	deviceMemory    *vulkan.DeviceMemoryProperties
-	logger          *zap.Logger
+	logger          *slog.Logger
 
 	memoryTypeIndex        int
 	preferredBlockSize     int
@@ -42,7 +48,6 @@ type memoryBlockList struct {
 
 	memoryAllocateNext unsafe.Pointer
 	mutex              utils.OptionalRWMutex
-	blockPool          sync.Pool
 	blocks             []*deviceMemoryBlock
 	nextBlockId        int
 	incrementalSort    bool
@@ -86,11 +91,6 @@ func (l *memoryBlockList) Init(
 	l.algorithm = algorithm
 	l.priority = priority
 	l.minAllocationAlignment = minAllocationAlignment
-	l.blockPool = sync.Pool{
-		New: func() any {
-			return &deviceMemoryBlock{}
-		},
-	}
 	l.incrementalSort = true
 	l.mutex = utils.OptionalRWMutex{
 		UseMutex: useMutex,
@@ -104,7 +104,7 @@ func (l *memoryBlockList) Destroy() error {
 		if err != nil {
 			return err
 		}
-		l.blockPool.Put(block)
+		blockPool.Put(block)
 	}
 	l.blocks = nil
 	return nil
@@ -200,7 +200,7 @@ func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, erro
 	}
 
 	// Build allocation
-	block := l.blockPool.Get().(*deviceMemoryBlock)
+	block := blockPool.Get().(*deviceMemoryBlock)
 
 	block.Init(l.logger, l.parentPool, l.deviceMemory, l.memoryTypeIndex, memory, allocInfo.AllocationSize, l.nextBlockId, l.algorithm, l.bufferImageGranularity)
 	l.nextBlockId++
@@ -336,7 +336,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 
 			res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 			if err == nil {
-				l.logger.Debug("    Returned from last block", zap.Int("block.id", currentBlock.id))
+				l.logger.LogAttrs(nil, slog.LevelDebug, "    Returned from last block", slog.Int("block.id", currentBlock.id))
 				l.incrementallySortBlocks()
 				return res, nil
 			} else if res == core1_0.VKErrorUnknown {
@@ -368,7 +368,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 					if (mappingIndex == 0) == (isMappingAllowed == isBlockMapped) {
 						res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 						if err == nil {
-							l.logger.Debug("    Returned from existing block", zap.Int("block.id", currentBlock.id))
+							l.logger.LogAttrs(nil, slog.LevelDebug, "    Returned from existing block", slog.Int("block.id", currentBlock.id))
 							l.incrementallySortBlocks()
 							return res, nil
 						} else if res == core1_0.VKErrorUnknown {
@@ -389,7 +389,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 
 				res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 				if err == nil {
-					l.logger.Debug("   Returned from existing block", zap.Int("block.id", currentBlock.id))
+					l.logger.LogAttrs(nil, slog.LevelDebug, "   Returned from existing block", slog.Int("block.id", currentBlock.id))
 					l.incrementallySortBlocks()
 					return res, nil
 				} else if res == core1_0.VKErrorUnknown {
@@ -407,7 +407,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 
 			res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 			if err == nil {
-				l.logger.Debug("    Returned from existing block", zap.Int("block.id", currentBlock.id))
+				l.logger.LogAttrs(nil, slog.LevelDebug, "    Returned from existing block", slog.Int("block.id", currentBlock.id))
 				l.incrementallySortBlocks()
 				return res, nil
 			} else if res == core1_0.VKErrorUnknown {
@@ -464,7 +464,6 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 
 			res, err = l.allocFromBlock(block, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 			if err == nil {
-				l.logger.Debug("    Created new block", zap.Int("block.id", block.id), zap.Int("block.size", newBlockSize))
 				l.incrementallySortBlocks()
 				return res, nil
 			} else if res == core1_0.VKErrorUnknown {
@@ -484,12 +483,12 @@ func (l *memoryBlockList) Free(alloc *Allocation) error {
 	}
 
 	if blockToDelete != nil {
-		l.logger.Debug("    Deleted empty block", zap.Int("block.id", blockToDelete.id))
+		l.logger.LogAttrs(nil, slog.LevelDebug, "    Deleted empty block", slog.Int("block.id", blockToDelete.id))
 		err = blockToDelete.Destroy()
 		if err != nil {
 			panic(fmt.Sprintf("unexpected failure when destroying a memory block in response to freeing an allocation: %+v", err))
 		}
-		l.blockPool.Put(blockToDelete)
+		blockPool.Put(blockToDelete)
 	}
 
 	l.deviceMemory.RemoveAllocation(heapIndex, alloc.size)
@@ -528,7 +527,7 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 	}
 	block.memory.RecordSuballocSubfree()
 
-	l.logger.Debug("    Freed from block", zap.Int("MemoryTypeIndex", l.memoryTypeIndex))
+	l.logger.LogAttrs(nil, slog.LevelDebug, "    Freed from block", slog.Int("MemoryTypeIndex", l.memoryTypeIndex))
 
 	canDeleteBlock := len(l.blocks) > l.minBlockCount
 
@@ -600,18 +599,17 @@ func (l *memoryBlockList) calcMaxBlockSize() int {
 func (l *memoryBlockList) allocFromBlock(block *deviceMemoryBlock, size int, alignment uint, allocFlags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, strategy memutils.AllocationCreateFlags, outAlloc *Allocation) (common.VkResult, error) {
 	isUpperAddress := allocFlags&memutils.AllocationCreateUpperAddress != 0
 
-	var currRequest metadata.AllocationRequest
-	success, err := block.metadata.PopulateAllocationRequest(size, alignment, isUpperAddress, suballocType, strategy, &currRequest)
+	success, currRequest, err := block.metadata.CreateAllocationRequest(size, alignment, isUpperAddress, suballocType, strategy)
 	if err != nil {
 		return core1_0.VKErrorUnknown, err
 	} else if !success {
 		return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
 	}
 
-	return l.commitAllocationRequest(&currRequest, block, alignment, allocFlags, userData, suballocType, outAlloc)
+	return l.commitAllocationRequest(currRequest, block, alignment, allocFlags, userData, suballocType, outAlloc)
 }
 
-func (l *memoryBlockList) commitAllocationRequest(allocRequest *metadata.AllocationRequest, block *deviceMemoryBlock, alignment uint, allocFlags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
+func (l *memoryBlockList) commitAllocationRequest(allocRequest metadata.AllocationRequest, block *deviceMemoryBlock, alignment uint, allocFlags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
 	mapped := allocFlags&memutils.AllocationCreateMapped != 0
 	isMappingAllowed := allocFlags&(memutils.AllocationCreateHostAccessSequentialWrite|memutils.AllocationCreateHostAccessRandom) != 0
 
@@ -744,7 +742,7 @@ func (l *memoryBlockList) Unlock() {
 	l.mutex.Unlock()
 }
 
-func (l *memoryBlockList) CommitDefragAllocationRequest(allocRequest *metadata.AllocationRequest, blockIndex int, alignment uint, flags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
+func (l *memoryBlockList) CommitDefragAllocationRequest(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
 	return l.commitAllocationRequest(
 		allocRequest,
 		l.blocks[blockIndex],

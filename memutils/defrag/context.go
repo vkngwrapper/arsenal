@@ -320,15 +320,14 @@ func (c *MetadataDefragContext[T]) incrementCounters(bytes int) bool {
 func (c *MetadataDefragContext[T]) allocFromBlock(blockList BlockList[T], blockIndex int, mtData metadata.BlockMetadata, size int, alignment uint, flags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *T) (common.VkResult, error) {
 	isUpperAddress := flags&memutils.AllocationCreateUpperAddress != 0
 
-	var currRequest metadata.AllocationRequest
-	success, err := mtData.PopulateAllocationRequest(size, alignment, isUpperAddress, suballocType, 0, &currRequest)
+	success, currRequest, err := mtData.CreateAllocationRequest(size, alignment, isUpperAddress, suballocType, 0)
 	if err != nil {
 		return core1_0.VKErrorUnknown, err
 	} else if !success {
 		return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
 	}
 
-	return blockList.CommitDefragAllocationRequest(&currRequest, blockIndex, alignment, flags, userData, suballocType, outAlloc)
+	return blockList.CommitDefragAllocationRequest(currRequest, blockIndex, alignment, flags, userData, suballocType, outAlloc)
 }
 
 func (c *MetadataDefragContext[T]) allocInOtherBlock(start, end int, data *MoveAllocationData[T], blockList BlockList[T]) bool {
@@ -387,14 +386,12 @@ func (c *MetadataDefragContext[T]) walkSuballocations(blockList BlockList[T], bl
 }
 
 func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
-	var allocRequest metadata.AllocationRequest
-	success, err := mtdata.PopulateAllocationRequest(
+	success, allocRequest, err := mtdata.CreateAllocationRequest(
 		moveData.Move.Size,
 		moveData.Alignment,
 		false,
 		moveData.SuballocationType,
 		memutils.AllocationCreateStrategyMinOffset,
-		&allocRequest,
 	)
 	if err != nil {
 		panic(fmt.Sprintf("unexpected error when populating allocation request for defrag: %+v", err))
@@ -402,7 +399,7 @@ func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockList Bloc
 
 	if success && c.mustFindOffset(mtdata, handle) < offset {
 		res, err := blockList.CommitDefragAllocationRequest(
-			&allocRequest,
+			allocRequest,
 			blockIndex,
 			moveData.Alignment,
 			moveData.Flags,

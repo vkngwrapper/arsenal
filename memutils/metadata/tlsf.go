@@ -7,7 +7,7 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"go.uber.org/zap"
+	"golang.org/x/exp/slog"
 	"math"
 	"math/bits"
 	"sync"
@@ -16,11 +16,17 @@ import (
 )
 
 const (
-	SecondLevelIndex int = 5
-	SmallBufferSize  int = 256
-	MemoryClassShift     = 7
-	MaxMemoryClasses     = 65 - MemoryClassShift
+	SmallBufferSize        = 256
+	SecondLevelIndex uint8 = 5
+	MemoryClassShift       = 7
+	MaxMemoryClasses       = 65 - MemoryClassShift
 )
+
+var blockAllocator = sync.Pool{
+	New: func() any {
+		return &tlsfBlock{}
+	},
+}
 
 type tlsfBlock struct {
 	offset       int
@@ -56,14 +62,12 @@ type TLSFBlockMetadata struct {
 	isFreeBitmap      uint32
 	memoryClasses     int
 	innerIsFreeBitmap [MaxMemoryClasses]uint32
-	listsCount        int
 
 	nextAllocationHandle BlockAllocationHandle
 	handleKey            map[BlockAllocationHandle]*tlsfBlock
 	freeList             []*tlsfBlock
 	nullBlock            *tlsfBlock
 	granularityHandler   BlockBufferImageGranularity
-	blockAllocator       sync.Pool
 }
 
 var _ BlockMetadata = &TLSFBlockMetadata{}
@@ -71,12 +75,6 @@ var _ BlockMetadata = &TLSFBlockMetadata{}
 func NewTLSFBlockMetadata(bufferImageGranularity int, isVirtual bool) *TLSFBlockMetadata {
 	return &TLSFBlockMetadata{
 		BlockMetadataBase: NewBlockMetadata(bufferImageGranularity, isVirtual),
-
-		blockAllocator: sync.Pool{
-			New: func() any {
-				return &tlsfBlock{}
-			},
-		},
 	}
 }
 
@@ -85,7 +83,7 @@ func (m *TLSFBlockMetadata) Destroy() {
 }
 
 func (m *TLSFBlockMetadata) allocateBlock() *tlsfBlock {
-	b := m.blockAllocator.Get().(*tlsfBlock)
+	b := blockAllocator.Get().(*tlsfBlock)
 	b.offset = 0
 	b.size = 0
 	b.prevPhysical = nil
@@ -100,7 +98,7 @@ func (m *TLSFBlockMetadata) allocateBlock() *tlsfBlock {
 
 func (m *TLSFBlockMetadata) freeBlock(b *tlsfBlock) {
 	delete(m.handleKey, b.blockHandle)
-	m.blockAllocator.Put(b)
+	blockAllocator.Put(b)
 }
 
 func (m *TLSFBlockMetadata) getBlock(handle BlockAllocationHandle) (*tlsfBlock, error) {
@@ -126,8 +124,9 @@ func (m *TLSFBlockMetadata) Init(size int) {
 	sli := m.sizeToSecondIndex(size, memoryClass)
 
 	listSize := 1
+	sliMask := int(uint(1) << SecondLevelIndex)
 	if memoryClass != 0 {
-		listSize = (memoryClass-1)*(1<<SecondLevelIndex) + sli + 1
+		listSize = int(memoryClass-1)*sliMask + int(sli+1)
 	}
 
 	if m.isVirtual {
@@ -136,7 +135,7 @@ func (m *TLSFBlockMetadata) Init(size int) {
 		listSize += 4
 	}
 
-	m.memoryClasses = memoryClass + 2
+	m.memoryClasses = int(memoryClass + 2)
 	m.freeList = make([]*tlsfBlock, listSize)
 }
 
@@ -296,17 +295,17 @@ func (m *TLSFBlockMetadata) getListIndexFromSize(size int) int {
 	return m.getListIndex(memoryClass, secondIndex)
 }
 
-func (m *TLSFBlockMetadata) getListIndex(memoryClass int, secondIndex int) int {
+func (m *TLSFBlockMetadata) getListIndex(memoryClass uint8, secondIndex uint16) int {
 	if memoryClass == 0 {
-		return secondIndex
+		return int(secondIndex)
 	}
 
-	i := (memoryClass-1)*(1<<SecondLevelIndex) + secondIndex
+	i := uint32(memoryClass-1)*uint32(uint(1)<<SecondLevelIndex) + uint32(secondIndex)
 	if m.isVirtual {
-		return i + (1 << SecondLevelIndex)
+		return int(i + (uint32(1) << SecondLevelIndex))
 	}
 
-	return i + 4
+	return int(i) + 4
 }
 
 func (m *TLSFBlockMetadata) AllocationCount() int {
@@ -325,39 +324,43 @@ func (m *TLSFBlockMetadata) IsEmpty() bool {
 	return m.nullBlock.offset == 0
 }
 
-func (m *TLSFBlockMetadata) sizeToMemoryClass(size int) int {
+func (m *TLSFBlockMetadata) sizeToMemoryClass(size int) uint8 {
 	if size > SmallBufferSize {
-		return bits.LeadingZeros(uint(size)) - MemoryClassShift
+		mostSignificantBit := uint8(63 - bits.LeadingZeros64(uint64(size)))
+		return mostSignificantBit - MemoryClassShift
 	}
 
 	return 0
 }
 
-func (m *TLSFBlockMetadata) sizeToSecondIndex(size int, memoryClass int) int {
+func (m *TLSFBlockMetadata) sizeToSecondIndex(size int, memoryClass uint8) uint16 {
 	if memoryClass != 0 {
-		return (size >> (memoryClass + MemoryClassShift - SecondLevelIndex)) ^ (1 << SecondLevelIndex)
+		mask := uint(1) << SecondLevelIndex
+		indexVal := uint(size) >> (memoryClass + MemoryClassShift - SecondLevelIndex)
+		return uint16(indexVal ^ mask)
 	}
 
 	if m.isVirtual {
-		return (size - 1) / 8
+		return uint16((size - 1) / 8)
 	}
 
-	return (size - 1) / 64
+	return uint16((size - 1) / 64)
 }
 
-func (m *TLSFBlockMetadata) PopulateAllocationRequest(
+func (m *TLSFBlockMetadata) CreateAllocationRequest(
 	allocSize int, allocAlignment uint,
 	upperAddress bool,
 	allocType SuballocationType,
 	strategy memutils.AllocationCreateFlags,
-	allocRequest *AllocationRequest,
-) (bool, error) {
+) (bool, AllocationRequest, error) {
+	var allocRequest AllocationRequest
+
 	if allocSize < 1 {
-		return false, errors.Newf("Invalid allocSize: %d", allocSize)
+		return false, allocRequest, errors.Newf("Invalid allocSize: %d", allocSize)
 	}
 
 	if upperAddress {
-		return false, errors.New("AllocationCreateUpperAddress can only be used with the Linear algorithm")
+		return false, allocRequest, errors.New("AllocationCreateUpperAddress can only be used with the Linear algorithm")
 	}
 
 	// Round up granularity
@@ -369,12 +372,13 @@ func (m *TLSFBlockMetadata) PopulateAllocationRequest(
 
 	// Is pool big enough?
 	if allocSize > m.SumFreeSize() {
-		return false, nil
+		return false, allocRequest, nil
 	}
 
 	// Any free blocks in the pool?
 	if m.blocksFreeCount == 0 {
-		return m.checkBlock(m.nullBlock, m.listsCount, allocSize, allocAlignment, allocType, allocRequest), nil
+		success := m.checkBlock(m.nullBlock, len(m.freeList), allocSize, allocAlignment, allocType, &allocRequest)
+		return success, allocRequest, nil
 	}
 
 	// Round up to the next block
@@ -385,7 +389,8 @@ func (m *TLSFBlockMetadata) PopulateAllocationRequest(
 	}
 	smallSizeStep := SmallBufferSize / smallSizeStepDivisor
 	if allocSize > SmallBufferSize {
-		sizeForNextList += 1<<bits.LeadingZeros(uint(allocSize)) - SecondLevelIndex
+		mostSignificantBit := 63 - bits.LeadingZeros64(uint64(allocSize))
+		sizeForNextList += int(uint(1) << (mostSignificantBit - int(SecondLevelIndex)))
 	} else if allocSize > SmallBufferSize-smallSizeStep {
 		sizeForNextList = SmallBufferSize + 1
 	} else {
@@ -402,23 +407,23 @@ func (m *TLSFBlockMetadata) PopulateAllocationRequest(
 		nextListBlock, nextListIndex = m.findFreeBlock(sizeForNextList, nextListIndex)
 
 		if nextListBlock != nil {
-			foundBlock := m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, allocRequest)
+			foundBlock := m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, &allocRequest)
 			if foundBlock {
-				return foundBlock, nil
+				return foundBlock, allocRequest, nil
 			}
 		}
 
 		// If not fitted then null block
-		foundBlock := m.checkBlock(m.nullBlock, m.listsCount, allocSize, allocAlignment, allocType, allocRequest)
+		foundBlock := m.checkBlock(m.nullBlock, len(m.freeList), allocSize, allocAlignment, allocType, &allocRequest)
 		if foundBlock {
-			return foundBlock, nil
+			return foundBlock, allocRequest, nil
 		}
 
 		// Null block failed, search larger bucket
 		for nextListBlock != nil {
-			foundBlock = m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, allocRequest)
+			foundBlock = m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, &allocRequest)
 			if foundBlock {
-				return foundBlock, nil
+				return foundBlock, allocRequest, nil
 			}
 
 			nextListBlock = nextListBlock.nextFree
@@ -428,9 +433,9 @@ func (m *TLSFBlockMetadata) PopulateAllocationRequest(
 		prevListBlock, prevListIndex = m.findFreeBlock(allocSize, prevListIndex)
 
 		for prevListBlock != nil {
-			foundBlock = m.checkBlock(prevListBlock, prevListIndex, allocSize, allocAlignment, allocType, allocRequest)
+			foundBlock = m.checkBlock(prevListBlock, prevListIndex, allocSize, allocAlignment, allocType, &allocRequest)
 			if foundBlock {
-				return foundBlock, nil
+				return foundBlock, allocRequest, nil
 			}
 
 			prevListBlock = prevListBlock.nextFree
@@ -440,27 +445,27 @@ func (m *TLSFBlockMetadata) PopulateAllocationRequest(
 		prevListBlock, prevListIndex = m.findFreeBlock(allocSize, prevListIndex)
 
 		for prevListBlock != nil {
-			foundBlock := m.checkBlock(prevListBlock, prevListIndex, allocSize, allocAlignment, allocType, allocRequest)
+			foundBlock := m.checkBlock(prevListBlock, prevListIndex, allocSize, allocAlignment, allocType, &allocRequest)
 			if foundBlock {
-				return foundBlock, nil
+				return foundBlock, allocRequest, nil
 			}
 
 			prevListBlock = prevListBlock.nextFree
 		}
 
 		// If failed check null block
-		foundBlock := m.checkBlock(m.nullBlock, m.listsCount, allocSize, allocAlignment, allocType, allocRequest)
+		foundBlock := m.checkBlock(m.nullBlock, len(m.freeList), allocSize, allocAlignment, allocType, &allocRequest)
 		if foundBlock {
-			return foundBlock, nil
+			return foundBlock, allocRequest, nil
 		}
 
 		// Check larger bucket
 		nextListBlock, nextListIndex = m.findFreeBlock(sizeForNextList, nextListIndex)
 
 		for nextListBlock != nil {
-			foundBlock = m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, allocRequest)
+			foundBlock = m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, &allocRequest)
 			if foundBlock {
-				return foundBlock, nil
+				return foundBlock, allocRequest, nil
 			}
 
 			nextListBlock = nextListBlock.nextFree
@@ -471,45 +476,45 @@ func (m *TLSFBlockMetadata) PopulateAllocationRequest(
 		// In VMA, it just makes a vector of block pointers and populates it by enumerating backward
 		// through the list and then searches forward through the vector. In Go, in order to avoid
 		// allocating a slice, we do it recursively.
-		foundBlock := m.minOffsetCheckBlocksBefore(m.nullBlock, allocSize, allocAlignment, allocType, allocRequest)
+		foundBlock := m.minOffsetCheckBlocksBefore(m.nullBlock, allocSize, allocAlignment, allocType, &allocRequest)
 		if foundBlock {
-			return foundBlock, nil
+			return foundBlock, allocRequest, nil
 		}
 
 		// If failed, check null block
-		foundBlock = m.checkBlock(m.nullBlock, m.listsCount, allocSize, allocAlignment, allocType, allocRequest)
+		foundBlock = m.checkBlock(m.nullBlock, len(m.freeList), allocSize, allocAlignment, allocType, &allocRequest)
 		if foundBlock {
-			return foundBlock, nil
+			return foundBlock, allocRequest, nil
 		}
 
 		// Whole range searched, no more memory
-		return false, nil
+		return false, allocRequest, nil
 	} else {
 		// Check larger bucket
 		nextListBlock, nextListIndex = m.findFreeBlock(sizeForNextList, nextListIndex)
 
 		for nextListBlock != nil {
-			foundBlock := m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, allocRequest)
+			foundBlock := m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, &allocRequest)
 			if foundBlock {
-				return foundBlock, nil
+				return foundBlock, allocRequest, nil
 			}
 
 			nextListBlock = nextListBlock.nextFree
 		}
 
 		// If failed, check null block
-		foundBlock := m.checkBlock(m.nullBlock, m.listsCount, allocSize, allocAlignment, allocType, allocRequest)
+		foundBlock := m.checkBlock(m.nullBlock, len(m.freeList), allocSize, allocAlignment, allocType, &allocRequest)
 		if foundBlock {
-			return foundBlock, nil
+			return foundBlock, allocRequest, nil
 		}
 
 		// Check best fit bucket
 		prevListBlock, prevListIndex = m.findFreeBlock(allocSize, prevListIndex)
 
 		for prevListBlock != nil {
-			foundBlock = m.checkBlock(prevListBlock, prevListIndex, allocSize, allocAlignment, allocType, allocRequest)
+			foundBlock = m.checkBlock(prevListBlock, prevListIndex, allocSize, allocAlignment, allocType, &allocRequest)
 			if foundBlock {
-				return foundBlock, nil
+				return foundBlock, allocRequest, nil
 			}
 
 			prevListBlock = prevListBlock.nextFree
@@ -517,12 +522,12 @@ func (m *TLSFBlockMetadata) PopulateAllocationRequest(
 	}
 
 	// Worst case, full search has to be done
-	for nextListIndex++; nextListIndex < m.listsCount; nextListIndex++ {
+	for nextListIndex++; nextListIndex < len(m.freeList); nextListIndex++ {
 		nextListBlock = m.freeList[nextListIndex]
 		for nextListBlock != nil {
-			foundBlock := m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, allocRequest)
+			foundBlock := m.checkBlock(nextListBlock, nextListIndex, allocSize, allocAlignment, allocType, &allocRequest)
 			if foundBlock {
-				return foundBlock, nil
+				return foundBlock, allocRequest, nil
 			}
 
 			nextListBlock = nextListBlock.nextFree
@@ -530,7 +535,7 @@ func (m *TLSFBlockMetadata) PopulateAllocationRequest(
 	}
 
 	// No more memory to check
-	return false, nil
+	return false, allocRequest, nil
 }
 
 func (m *TLSFBlockMetadata) minOffsetCheckBlocksBefore(
@@ -594,7 +599,7 @@ func (m *TLSFBlockMetadata) checkBlock(
 	allocRequest.AlgorithmData = uint64(alignedOffset)
 
 	// Place block at the start of list if it's a normal block
-	if listIndex != m.listsCount && block.prevFree != nil {
+	if listIndex != len(m.freeList) && block.prevFree != nil {
 		block.prevFree.nextFree = block.nextFree
 		if block.nextFree != nil {
 			block.nextFree.prevFree = block.prevFree
@@ -623,7 +628,7 @@ func (m *TLSFBlockMetadata) findFreeBlock(size int, listIndex int) (*tlsfBlock, 
 		}
 
 		// Find lowest free region
-		memoryClass = bits.TrailingZeros(uint(freeMap))
+		memoryClass = uint8(bits.TrailingZeros64(uint64(freeMap)))
 		innerFreeMap = m.innerIsFreeBitmap[memoryClass]
 		if innerFreeMap == 0 {
 			panic("free bitmap is in an invalid state")
@@ -631,7 +636,7 @@ func (m *TLSFBlockMetadata) findFreeBlock(size int, listIndex int) (*tlsfBlock, 
 	}
 
 	// Find lowest free subregion
-	listIndex = m.getListIndex(memoryClass, bits.TrailingZeros(uint(innerFreeMap)))
+	listIndex = m.getListIndex(memoryClass, uint16(bits.TrailingZeros64(uint64(innerFreeMap))))
 	if m.freeList[listIndex] == nil {
 		panic(fmt.Sprintf("free list index %d was listed as having free blocks, but no blocks were in the free list", listIndex))
 	}
@@ -674,7 +679,7 @@ func (m *TLSFBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.Vk
 	return core1_0.VKSuccess, nil
 }
 
-func (m *TLSFBlockMetadata) Alloc(req *AllocationRequest, suballocType SuballocationType, userData any) error {
+func (m *TLSFBlockMetadata) Alloc(req AllocationRequest, suballocType SuballocationType, userData any) error {
 	if req.Type != AllocationRequestTLSF {
 		return errors.New("allocation request was received by an incompatible metadata")
 	}
@@ -900,7 +905,7 @@ func (m *TLSFBlockMetadata) insertFreeBlock(block *tlsfBlock) {
 	secondIndex := m.sizeToSecondIndex(block.size, memClass)
 	index := m.getListIndex(memClass, secondIndex)
 
-	if index >= m.listsCount {
+	if index >= len(m.freeList) {
 		panic("invalid free list index found for block")
 	}
 
@@ -1005,12 +1010,12 @@ func (m *TLSFBlockMetadata) Clear() {
 		block = prev
 	}
 
-	m.freeList = make([]*tlsfBlock, m.listsCount)
+	m.freeList = make([]*tlsfBlock, len(m.freeList))
 	m.innerIsFreeBitmap = [MaxMemoryClasses]uint32{}
 	m.granularityHandler.Clear()
 }
 
-func (m *TLSFBlockMetadata) DebugLogAllAllocations(logger *zap.Logger, logFunc func(log *zap.Logger, offset int, size int, userData any)) {
+func (m *TLSFBlockMetadata) DebugLogAllAllocations(logger *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any)) {
 	for block := m.nullBlock.prevPhysical; block != nil; block = block.prevPhysical {
 		if !block.IsFree() {
 			logFunc(logger, block.offset, block.size, block.userData)

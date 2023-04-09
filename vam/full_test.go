@@ -99,6 +99,8 @@ func BenchmarkCreateAllocation(b *testing.B) {
 		require.NoError(b, allocator.Destroy())
 	}()
 
+	slice := make([]Allocation, 1)
+
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		memReqs := core1_0.MemoryRequirements{
@@ -106,10 +108,39 @@ func BenchmarkCreateAllocation(b *testing.B) {
 			Alignment:      1,
 			MemoryTypeBits: 0xffffffff,
 		}
-		var alloc Allocation
-		_, err = allocator.AllocateMemory(&memReqs, AllocationCreateInfo{}, &alloc)
+
+		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, slice)
 		require.NoError(b, err)
 
-		require.NoError(b, alloc.Free())
+		require.NoError(b, slice[0].Free())
+	}
+}
+
+func BenchmarkCreateAllocationSlice(b *testing.B) {
+	instance, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	defer destroyApplication(b, instance, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+
+	slice := make([]Allocation, 100)
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		memReqs := core1_0.MemoryRequirements{
+			Size:           100000,
+			Alignment:      1,
+			MemoryTypeBits: 0xffffffff,
+		}
+
+		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, slice)
+		require.NoError(b, err)
+
+		require.NoError(b, allocator.FreeAllocationSlice(slice))
 	}
 }

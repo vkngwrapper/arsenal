@@ -5,7 +5,7 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/driver"
-	"go.uber.org/zap"
+	"golang.org/x/exp/slog"
 	"unsafe"
 )
 
@@ -34,18 +34,17 @@ type BlockMetadata interface {
 	AddStatistics(stats *memutils.Statistics)
 
 	Clear()
-	DebugLogAllAllocations(log *zap.Logger, logFunc func(log *zap.Logger, offset int, size int, userData any))
+	DebugLogAllAllocations(log *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any))
 	PrintDetailedMapHeader(json jwriter.ObjectState) error
 
 	CheckCorruption(blockData unsafe.Pointer) (common.VkResult, error)
-	PopulateAllocationRequest(
+	CreateAllocationRequest(
 		allocSize int, allocAlignment uint,
 		upperAddress bool,
 		allocType SuballocationType,
 		strategy memutils.AllocationCreateFlags,
-		allocRequest *AllocationRequest,
-	) (bool, error)
-	Alloc(request *AllocationRequest, allocType SuballocationType, userData any) error
+	) (bool, AllocationRequest, error)
+	Alloc(request AllocationRequest, allocType SuballocationType, userData any) error
 
 	Free(allocHandle BlockAllocationHandle) error
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"go.uber.org/zap"
+	"golang.org/x/exp/slog"
 )
 
 type deviceMemoryBlock struct {
@@ -17,14 +17,14 @@ type deviceMemoryBlock struct {
 	memory          *vulkan.SynchronizedMemory
 	parentPool      *Pool
 	memoryTypeIndex int
-	logger          *zap.Logger
+	logger          *slog.Logger
 
 	metadata     metadata.BlockMetadata
 	deviceMemory *vulkan.DeviceMemoryProperties
 }
 
 func (b *deviceMemoryBlock) Init(
-	logger *zap.Logger,
+	logger *slog.Logger,
 	pool *Pool,
 	deviceMemory *vulkan.DeviceMemoryProperties,
 	newMemoryTypeIndex int,
@@ -79,7 +79,7 @@ func (b *deviceMemoryBlock) Destroy() error {
 	return nil
 }
 
-func (b *deviceMemoryBlock) logUnreleasedMemory(logger *zap.Logger, offset, size int, userData any) {
+func (b *deviceMemoryBlock) logUnreleasedMemory(logger *slog.Logger, offset, size int, userData any) {
 	allocation := userData.(*Allocation)
 	userData = allocation.UserData()
 	name := allocation.Name()
@@ -87,11 +87,11 @@ func (b *deviceMemoryBlock) logUnreleasedMemory(logger *zap.Logger, offset, size
 		name = "empty"
 	}
 
-	logger.Error("[UNRELEASED MEMORY] unfreed allocation",
-		zap.Int("offset", offset),
-		zap.Int("size", size),
-		zap.Any("userData", userData),
-		zap.String("name", name),
+	logger.LogAttrs(nil, slog.LevelError, "[UNRELEASED MEMORY] unfreed allocation",
+		slog.Int("offset", offset),
+		slog.Int("size", size),
+		slog.Any("userData", userData),
+		slog.String("name", name),
 	)
 }
 

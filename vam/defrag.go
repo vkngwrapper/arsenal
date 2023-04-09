@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
 	"github.com/vkngwrapper/core/v2/common"
-	"go.uber.org/zap"
+	"golang.org/x/exp/slog"
 )
 
 type DefragmentationFlags uint32
@@ -44,7 +44,7 @@ type DefragmentationInfo struct {
 type DefragmentationContext struct {
 	context defrag.MetadataDefragContext[Allocation]
 
-	logger                    *zap.Logger
+	logger                    *slog.Logger
 	poolMemoryBlockList       *memoryBlockList
 	allocatorMemoryBlockLists [common.MaxMemoryTypes]*memoryBlockList
 
