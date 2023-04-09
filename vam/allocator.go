@@ -14,7 +14,7 @@ import (
 	"github.com/vkngwrapper/extensions/v2/khr_buffer_device_address"
 	"github.com/vkngwrapper/extensions/v2/khr_dedicated_allocation"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
-	"golang.org/x/exp/slog"
+	"go.uber.org/zap"
 	"math"
 	"math/bits"
 	"unsafe"
@@ -22,7 +22,7 @@ import (
 
 type Allocator struct {
 	useMutex            bool
-	logger              *slog.Logger
+	logger              *zap.Logger
 	instance            core1_0.Instance
 	physicalDevice      core1_0.PhysicalDevice
 	device              core1_0.Device
@@ -455,7 +455,7 @@ func (a *Allocator) allocateDedicatedMemory(
 			dedicatedAllocations.Register(&allocations[registerIndex])
 		}
 
-		a.logger.Debug("    Allocated DedicatedMemory", slog.Int("Count", len(allocations)), slog.Int("MemoryTypeIndex", memoryTypeIndex))
+		a.logger.Debug("    Allocated DedicatedMemory", zap.Int("Count", len(allocations)), zap.Int("MemoryTypeIndex", memoryTypeIndex))
 
 		return core1_0.VKSuccess, nil
 	}
@@ -494,7 +494,7 @@ func (a *Allocator) allocateMemoryOfType(
 		panic("allocateMemoryOfType called with a nil createInfo")
 	}
 
-	a.logger.Debug("Allocator::allocateMemoryOfType", slog.Int("MemoryTypeIndex", memoryTypeIndex), slog.Int("AllocationCount", len(allocations)), slog.Int("Size", size))
+	a.logger.Debug("Allocator::allocateMemoryOfType", zap.Int("MemoryTypeIndex", memoryTypeIndex), zap.Int("AllocationCount", len(allocations)), zap.Int("Size", size))
 
 	finalCreateInfo := *createInfo
 
@@ -912,7 +912,7 @@ func (a *Allocator) freeDedicatedMemory(alloc *Allocation) {
 	heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex)
 	a.deviceMemory.RemoveAllocation(heapIndex, alloc.Size())
 
-	a.logger.Debug("    Freed DedicatedMemory", slog.Int("MemoryTypeIndex", memoryTypeIndex))
+	a.logger.Debug("    Freed DedicatedMemory", zap.Int("MemoryTypeIndex", memoryTypeIndex))
 }
 
 func (a *Allocator) FlushAllocationSlice(allocations []Allocation, offsets []int, sizes []int) (common.VkResult, error) {
@@ -1045,8 +1045,8 @@ func (a *Allocator) checkCustomPools(memoryTypeBits uint32) (common.VkResult, er
 func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResult, error) {
 
 	a.logger.Debug("Allocator::CreatePool",
-		slog.Int("MemoryTypeIndex", createInfo.MemoryTypeIndex),
-		slog.String("Flags", createInfo.Flags.String()),
+		zap.Int("MemoryTypeIndex", createInfo.MemoryTypeIndex),
+		zap.String("Flags", createInfo.Flags.String()),
 	)
 
 	if createInfo.MaxBlockCount == 0 {
@@ -1110,7 +1110,7 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 	if err != nil {
 		destroyErr := pool.Destroy()
 		if err != nil {
-			a.logger.Error("error attempting to destroy pool after creation failure", slog.Any("error", destroyErr))
+			a.logger.Error("error attempting to destroy pool after creation failure", zap.Error(destroyErr))
 		}
 		return nil, res, err
 	}
@@ -1122,7 +1122,7 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 	if err != nil {
 		destroyErr := pool.destroyAfterLock()
 		if destroyErr != nil {
-			a.logger.Error("error attempting to destroy pool after failing to set id", slog.Any("error", destroyErr))
+			a.logger.Error("error attempting to destroy pool after failing to set id", zap.Error(destroyErr))
 		}
 
 		return nil, core1_0.VKErrorUnknown, err
@@ -1242,7 +1242,7 @@ func (a *Allocator) createBuffer(bufferInfo *core1_0.BufferCreateInfo, allocatio
 		if err != nil {
 			freeErr := outAlloc.free()
 			if freeErr != nil {
-				a.logger.Error("failed to free temporary alloc after error", slog.Any("error", freeErr))
+				a.logger.Error("failed to free temporary alloc after error", zap.Error(freeErr))
 			}
 		}
 	}()
@@ -1315,7 +1315,7 @@ func (a *Allocator) CreateImage(imageInfo core1_0.ImageCreateInfo, allocInfo All
 		if err != nil {
 			freeErr := outAlloc.free()
 			if freeErr != nil {
-				a.logger.Error("failed to free temporary alloc after error", slog.Any("error", freeErr))
+				a.logger.Error("failed to free temporary alloc after error", zap.Error(freeErr))
 			}
 		}
 	}()

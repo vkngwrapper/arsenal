@@ -34,7 +34,7 @@ func (c *memoryCallbacks) Allocate(
 	memory core1_0.DeviceMemory,
 	size int,
 ) {
-	if c.Callbacks.Allocate != nil {
+	if c.Callbacks != nil && c.Callbacks.Allocate != nil {
 		c.Callbacks.Allocate(c.Allocator, memoryType, memory, size, c.Callbacks.UserData)
 	}
 }
@@ -44,7 +44,7 @@ func (c *memoryCallbacks) Free(
 	memory core1_0.DeviceMemory,
 	size int,
 ) {
-	if c.Callbacks.Free != nil {
+	if c.Callbacks != nil && c.Callbacks.Free != nil {
 		c.Callbacks.Free(c.Allocator, memoryType, memory, size, c.Callbacks.UserData)
 	}
 }

@@ -98,6 +98,10 @@ func NewDeviceMemoryProperties(
 		return nil, errors.New("memory.CreateOptions.ExternalMemoryHandleTypes was provided, but the length does not equal the number of PhysicalDevice heap types")
 	}
 
+	if heapLimitCount == 0 {
+		heapSizeLimits = make([]int, heapCount)
+	}
+
 	deviceProperties.heapLimits = heapSizeLimits
 	deviceProperties.externalMemoryHandleTypes = externalMemoryHandleTypes
 
@@ -181,7 +185,7 @@ func (m *DeviceMemoryProperties) removeBlockAllocation(heapIndex, allocationSize
 
 	// Decrement
 	newCountVal := atomic.AddInt32(&m.blockCount[heapIndex], -1)
-	if newCountVal == 0 {
+	if newCountVal < 0 {
 		panic(fmt.Sprintf("block count budget for heapIndex %d went negative", heapIndex))
 	}
 }
@@ -277,12 +281,12 @@ func (m *DeviceMemoryProperties) AddAllocation(heapIndex int, size int) {
 }
 
 func (m *DeviceMemoryProperties) RemoveAllocation(heapIndex int, size int) {
-	newSizeVal := atomic.AddInt64(&m.allocationBytes[heapIndex], int64(size))
+	newSizeVal := atomic.AddInt64(&m.allocationBytes[heapIndex], -int64(size))
 	if newSizeVal < 0 {
 		panic(fmt.Sprintf("allocation bytes budget for heapIndex %d went negative", heapIndex))
 	}
 
-	newCountVal := atomic.AddInt32(&m.allocationCount[heapIndex], 1)
+	newCountVal := atomic.AddInt32(&m.allocationCount[heapIndex], -1)
 	if newCountVal < 0 {
 		panic(fmt.Sprintf("allocation count budget for heapIndex %d went negative", heapIndex))
 	}

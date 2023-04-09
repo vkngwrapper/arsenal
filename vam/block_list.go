@@ -14,7 +14,7 @@ import (
 	"github.com/vkngwrapper/core/v2/core1_1"
 	"github.com/vkngwrapper/core/v2/core1_2"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
-	"golang.org/x/exp/slog"
+	"go.uber.org/zap"
 	"sort"
 	"strconv"
 	"sync"
@@ -27,7 +27,7 @@ type memoryBlockList struct {
 	parentAllocator *Allocator
 	parentPool      *Pool
 	deviceMemory    *vulkan.DeviceMemoryProperties
-	logger          *slog.Logger
+	logger          *zap.Logger
 
 	memoryTypeIndex        int
 	preferredBlockSize     int
@@ -159,7 +159,7 @@ func (l *memoryBlockList) HasNoAllocations() bool {
 	defer l.mutex.RUnlock()
 
 	for blockIndex := 0; blockIndex < len(l.blocks); blockIndex++ {
-		if !l.IsEmpty() {
+		if !l.blocks[blockIndex].metadata.IsEmpty() {
 			return false
 		}
 	}
@@ -336,7 +336,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 
 			res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 			if err == nil {
-				l.logger.Debug("    Returned from last block", slog.Int("block.id", currentBlock.id))
+				l.logger.Debug("    Returned from last block", zap.Int("block.id", currentBlock.id))
 				l.incrementallySortBlocks()
 				return res, nil
 			} else if res == core1_0.VKErrorUnknown {
@@ -368,7 +368,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 					if (mappingIndex == 0) == (isMappingAllowed == isBlockMapped) {
 						res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 						if err == nil {
-							l.logger.Debug("    Returned from existing block", slog.Int("block.id", currentBlock.id))
+							l.logger.Debug("    Returned from existing block", zap.Int("block.id", currentBlock.id))
 							l.incrementallySortBlocks()
 							return res, nil
 						} else if res == core1_0.VKErrorUnknown {
@@ -389,7 +389,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 
 				res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 				if err == nil {
-					l.logger.Debug("   Returned from existing block", slog.Int("block.id", currentBlock.id))
+					l.logger.Debug("   Returned from existing block", zap.Int("block.id", currentBlock.id))
 					l.incrementallySortBlocks()
 					return res, nil
 				} else if res == core1_0.VKErrorUnknown {
@@ -407,7 +407,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 
 			res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 			if err == nil {
-				l.logger.Debug("    Returned from existing block", slog.Int("block.id", currentBlock.id))
+				l.logger.Debug("    Returned from existing block", zap.Int("block.id", currentBlock.id))
 				l.incrementallySortBlocks()
 				return res, nil
 			} else if res == core1_0.VKErrorUnknown {
@@ -464,7 +464,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 
 			res, err = l.allocFromBlock(block, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 			if err == nil {
-				l.logger.Debug("    Created new block", slog.Int("block.id", block.id), slog.Int("block.size", newBlockSize))
+				l.logger.Debug("    Created new block", zap.Int("block.id", block.id), zap.Int("block.size", newBlockSize))
 				l.incrementallySortBlocks()
 				return res, nil
 			} else if res == core1_0.VKErrorUnknown {
@@ -484,7 +484,7 @@ func (l *memoryBlockList) Free(alloc *Allocation) error {
 	}
 
 	if blockToDelete != nil {
-		l.logger.Debug("    Deleted empty block", slog.Int("block.id", blockToDelete.id))
+		l.logger.Debug("    Deleted empty block", zap.Int("block.id", blockToDelete.id))
 		err = blockToDelete.Destroy()
 		if err != nil {
 			panic(fmt.Sprintf("unexpected failure when destroying a memory block in response to freeing an allocation: %+v", err))
@@ -528,7 +528,7 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 	}
 	block.memory.RecordSuballocSubfree()
 
-	l.logger.Debug("    Freed from block", slog.Int("MemoryTypeIndex", l.memoryTypeIndex))
+	l.logger.Debug("    Freed from block", zap.Int("MemoryTypeIndex", l.memoryTypeIndex))
 
 	canDeleteBlock := len(l.blocks) > l.minBlockCount
 

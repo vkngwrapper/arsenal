@@ -7,7 +7,7 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"golang.org/x/exp/slog"
+	"go.uber.org/zap"
 	"math"
 	"sort"
 	"unsafe"
@@ -615,7 +615,7 @@ func (m *LinearBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationH
 	return nil
 }
 
-func (m *LinearBlockMetadata) DebugLogAllAllocations(log *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any)) {
+func (m *LinearBlockMetadata) DebugLogAllAllocations(log *zap.Logger, logFunc func(log *zap.Logger, offset int, size int, userData any)) {
 	firstVector := *m.accessSuballocationsFirst()
 	for i := m.firstNullItemsBeginCount; i < len(firstVector); i++ {
 		suballoc := firstVector[i]

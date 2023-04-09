@@ -7,7 +7,7 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"golang.org/x/exp/slog"
+	"go.uber.org/zap"
 	"math"
 	"math/bits"
 	"sync"
@@ -113,6 +113,7 @@ func (m *TLSFBlockMetadata) getBlock(handle BlockAllocationHandle) (*tlsfBlock, 
 
 func (m *TLSFBlockMetadata) Init(size int) {
 	m.BlockMetadataBase.Init(size)
+	m.handleKey = make(map[BlockAllocationHandle]*tlsfBlock)
 
 	if !m.isVirtual {
 		m.granularityHandler.Init(size)
@@ -137,7 +138,6 @@ func (m *TLSFBlockMetadata) Init(size int) {
 
 	m.memoryClasses = memoryClass + 2
 	m.freeList = make([]*tlsfBlock, listSize)
-	m.handleKey = make(map[BlockAllocationHandle]*tlsfBlock)
 }
 
 func (m *TLSFBlockMetadata) Validate() error {
@@ -1010,7 +1010,7 @@ func (m *TLSFBlockMetadata) Clear() {
 	m.granularityHandler.Clear()
 }
 
-func (m *TLSFBlockMetadata) DebugLogAllAllocations(logger *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any)) {
+func (m *TLSFBlockMetadata) DebugLogAllAllocations(logger *zap.Logger, logFunc func(log *zap.Logger, offset int, size int, userData any)) {
 	for block := m.nullBlock.prevPhysical; block != nil; block = block.prevPhysical {
 		if !block.IsFree() {
 			logFunc(logger, block.offset, block.size, block.userData)
