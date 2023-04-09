@@ -105,15 +105,16 @@ func (a *Allocator) findMemoryPreferences(
 		break
 	case MemoryUsageAuto, MemoryUsageAutoPreferDevice, MemoryUsageAutoPreferHost:
 		{
-			if bufferOrImageUsage == nil {
-				return requiredFlags, preferredFlags, notPreferredFlags,
-					errors.New("MemoryUsageAuto* usages can only be used for Buffer- and Image-oriented allocation functions")
-			}
 			transferUsages := uint32(core1_0.BufferUsageTransferDst) | uint32(core1_0.BufferUsageTransferSrc) |
 				uint32(core1_0.ImageUsageTransferSrc) | uint32(core1_0.ImageUsageTransferDst)
 			nonTransferUsages := ^transferUsages
 
-			deviceAccess := (*bufferOrImageUsage & nonTransferUsages) != 0
+			var deviceAccess bool
+
+			if bufferOrImageUsage != nil {
+				deviceAccess = (*bufferOrImageUsage & nonTransferUsages) != 0
+			}
+
 			hostAccessSequentialWrite := o.Flags&memutils.AllocationCreateHostAccessSequentialWrite != 0
 			hostAccessRandom := o.Flags&memutils.AllocationCreateHostAccessRandom != 0
 			hostAccessAllowTransferInstead := o.Flags&memutils.AllocationCreateHostAccessAllowTransferInstead != 0

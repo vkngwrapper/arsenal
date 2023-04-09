@@ -8,7 +8,15 @@ import (
 type MemoryUsage uint32
 
 const (
-	// MemoryUsageUnknown indicates no intended memory usage was specified
+	// MemoryUsageUnknown indicates no intended memory usage was specified. When choosing a memory type,
+	// the Allocator uses only the Required and Preferred flags specified in AllocationCreateInfo to
+	// find an appropriate memory index and nothing else. This may be desirable when using Allocator.AllocateMemory
+	// and Allocator.AllocateMemorySlice, since the allocator does not have BufferUsage or ImageUsage flags
+	// to make decisions with. Bear in mind that it is possible, in this case, for the allocator to
+	// select a memory type that is not compatible with your AllocationCreateFlags if you do not
+	// specify appropriate RequiredFlags/PreferredFlags. For instance, if AllocationCreateFlags contains
+	// AllocationCreateMapped, but you do not specify HostVisible in your RequiredFlags, then
+	// the allocation may fail when it attempts to map your new memory.
 	MemoryUsageUnknown MemoryUsage = iota
 	// MemoryUsageGPULazilyAllocated indicates lazily-allocated GPU memory. Exists mostly
 	// on mobile platforms. Using it on desktop PC or other GPUs with no such memory type present

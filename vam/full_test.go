@@ -2,6 +2,7 @@ package vam
 
 import (
 	"github.com/stretchr/testify/require"
+	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -11,6 +12,7 @@ import (
 	"log"
 	"os"
 	"testing"
+	"unsafe"
 )
 
 func createApplication(t require.TestingT, name string) (core1_0.Instance, core1_0.PhysicalDevice, core1_0.Device) {
@@ -98,8 +100,7 @@ func BenchmarkCreateAllocation(b *testing.B) {
 	defer func() {
 		require.NoError(b, allocator.Destroy())
 	}()
-
-	slice := make([]Allocation, 1)
+	var alloc Allocation
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -109,10 +110,10 @@ func BenchmarkCreateAllocation(b *testing.B) {
 			MemoryTypeBits: 0xffffffff,
 		}
 
-		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, slice)
+		_, err = allocator.AllocateMemory(&memReqs, AllocationCreateInfo{}, &alloc)
 		require.NoError(b, err)
 
-		require.NoError(b, slice[0].Free())
+		require.NoError(b, alloc.Free())
 	}
 }
 
@@ -141,5 +142,50 @@ func BenchmarkCreateAllocationSlice(b *testing.B) {
 		require.NoError(b, err)
 
 		require.NoError(b, allocator.FreeAllocationSlice(slice))
+	}
+}
+
+func BenchmarkMapAlloc(b *testing.B) {
+	instance, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	defer destroyApplication(b, instance, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+
+	var alloc Allocation
+	memReqs := core1_0.MemoryRequirements{
+		Size:           100000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}
+
+	_, err = allocator.AllocateMemory(&memReqs, AllocationCreateInfo{
+		Usage: MemoryUsageAuto,
+		Flags: memutils.AllocationCreateHostAccessRandom,
+	}, &alloc)
+	require.NoError(b, err)
+
+	defer func() {
+		require.NoError(b, alloc.Free())
+	}()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ptr, _, err := alloc.Map()
+		require.NoError(b, err)
+
+		slice := ([]byte)(unsafe.Slice((*byte)(ptr), alloc.Size()))
+
+		for i := 0; i < len(slice); i++ {
+			slice[i] = 1
+		}
+
+		err = alloc.Unmap()
+		require.NoError(b, err)
 	}
 }

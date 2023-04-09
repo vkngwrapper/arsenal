@@ -187,13 +187,13 @@ func (m *SynchronizedMemory) Unmap(references int) error {
 	if m.mapReferences < 0 {
 		m.mapReferences = 0
 	}
+	m.postMapUnmap()
 
 	if m.References() <= 0 {
 		m.memory.Unmap()
 		m.mapData = nil
 	}
 
-	m.postMapUnmap()
 	return nil
 }
 
