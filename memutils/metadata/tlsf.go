@@ -112,7 +112,7 @@ func (m *TLSFBlockMetadata) getBlock(handle BlockAllocationHandle) (*tlsfBlock, 
 
 func (m *TLSFBlockMetadata) Init(size int) {
 	m.BlockMetadataBase.Init(size)
-	m.handleKey = swiss.NewMap[BlockAllocationHandle, *tlsfBlock](600)
+	m.handleKey = swiss.NewMap[BlockAllocationHandle, *tlsfBlock](50)
 
 	if !m.isVirtual {
 		m.granularityHandler.Init(size)
