@@ -228,11 +228,6 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 		}
 	}()
 
-	vulkanMem, res, err := m.device.AllocateMemory(m.allocationCallbacks, allocateInfo)
-	if err != nil {
-		return mem, res, err
-	}
-
 	// TODO: Memory budget
 
 	mem, res, err = allocateSynchronizedMemory(
@@ -248,7 +243,7 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	if m.memoryCallbacks != nil {
 		m.memoryCallbacks.Allocate(
 			allocateInfo.MemoryTypeIndex,
-			vulkanMem,
+			mem.memory,
 			allocateInfo.AllocationSize,
 		)
 	}

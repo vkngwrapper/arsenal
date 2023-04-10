@@ -1075,7 +1075,8 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 	}
 
 	pool := &Pool{
-		logger: a.logger,
+		parentAllocator: a,
+		logger:          a.logger,
 	}
 	blockSize := preferredBlockSize
 	if createInfo.BlockSize != 0 {
@@ -1129,7 +1130,11 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 		return nil, core1_0.VKErrorUnknown, err
 	}
 	pool.next = a.pools
-	a.pools.prev = pool
+
+	if a.pools != nil {
+		a.pools.prev = pool
+	}
+
 	a.pools = pool
 
 	return pool, core1_0.VKSuccess, nil

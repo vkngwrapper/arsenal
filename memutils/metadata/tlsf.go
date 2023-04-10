@@ -68,6 +68,7 @@ type TLSFBlockMetadata struct {
 	handleKey            *swiss.Map[BlockAllocationHandle, *tlsfBlock]
 	freeList             []*tlsfBlock
 	nullBlock            *tlsfBlock
+	tailBlock            *tlsfBlock
 	granularityHandler   BlockBufferImageGranularity
 }
 
@@ -121,6 +122,7 @@ func (m *TLSFBlockMetadata) Init(size int) {
 	m.nullBlock = m.allocateBlock()
 	m.nullBlock.size = size
 	m.nullBlock.MarkFree()
+	m.tailBlock = m.nullBlock
 	memoryClass := m.sizeToMemoryClass(size)
 	sli := m.sizeToSecondIndex(size, memoryClass)
 
@@ -477,7 +479,7 @@ func (m *TLSFBlockMetadata) CreateAllocationRequest(
 		// In VMA, it just makes a vector of block pointers and populates it by enumerating backward
 		// through the list and then searches forward through the vector. In Go, in order to avoid
 		// allocating a slice, we do it recursively.
-		foundBlock := m.minOffsetCheckBlocksBefore(m.nullBlock, allocSize, allocAlignment, allocType, &allocRequest)
+		foundBlock := m.minOffsetCheckBlocks(allocSize, allocAlignment, allocType, &allocRequest)
 		if foundBlock {
 			return foundBlock, allocRequest, nil
 		}
@@ -539,30 +541,22 @@ func (m *TLSFBlockMetadata) CreateAllocationRequest(
 	return false, allocRequest, nil
 }
 
-func (m *TLSFBlockMetadata) minOffsetCheckBlocksBefore(
-	startBlock *tlsfBlock,
+func (m *TLSFBlockMetadata) minOffsetCheckBlocks(
 	allocSize int,
 	allocAlignment uint,
 	allocType SuballocationType,
 	allocRequest *AllocationRequest,
 ) bool {
 
-	for block := startBlock.prevPhysical; block != nil; block = block.prevPhysical {
-		if block.IsFree() && block.size >= allocSize {
-			foundBlock := m.minOffsetCheckBlocksBefore(block, allocSize, allocAlignment, allocType, allocRequest)
-			if foundBlock {
+	for block := m.tailBlock; block != nil; block = block.nextPhysical {
+		if block.IsFree() && block.size >= allocSize && block != m.nullBlock {
+			if m.checkBlock(block, m.getListIndexFromSize(block.size), allocSize, allocAlignment, allocType, allocRequest) {
 				return true
 			}
-
-			break
 		}
 	}
 
-	if startBlock == m.nullBlock {
-		return false
-	}
-
-	return m.checkBlock(startBlock, m.getListIndexFromSize(startBlock.size), allocSize, allocAlignment, allocType, allocRequest)
+	return false
 }
 
 func (m *TLSFBlockMetadata) checkBlock(
@@ -936,6 +930,8 @@ func (m *TLSFBlockMetadata) mergeBlock(block *tlsfBlock, prev *tlsfBlock) {
 	block.prevPhysical = prev.prevPhysical
 	if block.prevPhysical != nil {
 		block.prevPhysical.nextPhysical = block
+	} else {
+		m.tailBlock = block
 	}
 
 	m.freeBlock(prev)
@@ -1004,6 +1000,7 @@ func (m *TLSFBlockMetadata) Clear() {
 	m.nullBlock.size = m.size
 	block := m.nullBlock.prevPhysical
 	m.nullBlock.prevPhysical = nil
+	m.tailBlock = m.nullBlock
 
 	for block != nil {
 		prev := block.prevPhysical

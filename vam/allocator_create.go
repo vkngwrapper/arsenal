@@ -150,6 +150,7 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 				return nil, err
 			}
 			allocator.memoryBlockLists[typeIndex] = &memoryBlockList{}
+			allocator.dedicatedAllocations[typeIndex] = &dedicatedAllocationList{}
 
 			allocator.memoryBlockLists[typeIndex].Init(
 				useMutex,
@@ -166,6 +167,8 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 				allocator.deviceMemory.MemoryTypeMinimumAlignment(typeIndex),
 				nil,
 			)
+
+			allocator.dedicatedAllocations[typeIndex].Init(useMutex)
 		}
 	}
 

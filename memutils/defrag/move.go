@@ -13,7 +13,7 @@ const (
 	DefragmentationMoveDestroy
 )
 
-type DefragmentOperationHandler[T any] func(move *DefragmentationMove[T]) error
+type DefragmentOperationHandler[T any] func(move DefragmentationMove[T]) error
 
 type DefragmentationMove[T any] struct {
 	MoveOperation DefragmentationMoveOperation
@@ -22,7 +22,7 @@ type DefragmentationMove[T any] struct {
 	SrcBlockMetadata metadata.BlockMetadata
 	SrcAllocation    *T
 	DstBlockMetadata metadata.BlockMetadata
-	DstTmpAllocation T
+	DstTmpAllocation *T
 }
 
 type defragmentOperation uint32

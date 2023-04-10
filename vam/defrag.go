@@ -3,6 +3,7 @@ package vam
 import (
 	"errors"
 	"fmt"
+	"github.com/dolthub/swiss"
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
 	"github.com/vkngwrapper/core/v2/common"
 	"golang.org/x/exp/slog"
@@ -48,13 +49,14 @@ type DefragmentationContext struct {
 	poolMemoryBlockList       *memoryBlockList
 	allocatorMemoryBlockLists [common.MaxMemoryTypes]*memoryBlockList
 
-	mapTransfers map[*deviceMemoryBlock]int
+	mapTransfers *swiss.Map[*deviceMemoryBlock, int]
 }
 
 func (c *DefragmentationContext) init(blockListCount int, o *DefragmentationInfo) {
 	c.context.MaxPassBytes = o.MaxBytesPerPass
 	c.context.MaxPassAllocations = o.MaxAllocationsPerPass
 	c.context.Handler = c.completePassForMove
+	c.mapTransfers = swiss.NewMap[*deviceMemoryBlock, int](42)
 
 	algorithm := o.Flags & DefragmentationFlagAlgorithmMask
 	switch algorithm {
@@ -87,8 +89,10 @@ func (c *DefragmentationContext) initForAllocator(allocator *Allocator, o *Defra
 	c.logger = allocator.logger
 
 	for i := 0; i < common.MaxMemoryTypes; i++ {
-		c.allocatorMemoryBlockLists[i].incrementalSort = false
-		c.allocatorMemoryBlockLists[i].SortByFreeSize()
+		if c.allocatorMemoryBlockLists[i] != nil {
+			c.allocatorMemoryBlockLists[i].incrementalSort = false
+			c.allocatorMemoryBlockLists[i].SortByFreeSize()
+		}
 	}
 }
 
@@ -99,7 +103,9 @@ func (c *DefragmentationContext) BeginAllocationPass() []defrag.DefragmentationM
 		c.context.BlockListCollectMoves(0, c.poolMemoryBlockList)
 	} else {
 		for i := 0; i < common.MaxMemoryTypes; i++ {
-			c.context.BlockListCollectMoves(i, c.allocatorMemoryBlockLists[i])
+			if c.allocatorMemoryBlockLists[i] != nil {
+				c.context.BlockListCollectMoves(i, c.allocatorMemoryBlockLists[i])
+			}
 		}
 	}
 
@@ -120,11 +126,13 @@ func (c *DefragmentationContext) EndAllocationPass() (bool, error) {
 		}
 	} else {
 		for i := 0; i < common.MaxMemoryTypes; i++ {
-			thisOneDone, err := c.completePassForBlockList(i, c.allocatorMemoryBlockLists[i])
-			if err != nil {
-				allErrors = append(allErrors, err)
+			if c.allocatorMemoryBlockLists[i] != nil {
+				thisOneDone, err := c.completePassForBlockList(i, c.allocatorMemoryBlockLists[i])
+				if err != nil {
+					allErrors = append(allErrors, err)
+				}
+				done = done && thisOneDone
 			}
-			done = done && thisOneDone
 		}
 	}
 
@@ -148,41 +156,46 @@ func (c *DefragmentationContext) Finish(outStats *defrag.DefragmentationStats) {
 		c.poolMemoryBlockList.incrementalSort = true
 	} else {
 		for i := 0; i < common.MaxMemoryTypes; i++ {
-			c.allocatorMemoryBlockLists[i].incrementalSort = true
+			if c.allocatorMemoryBlockLists[i] != nil {
+				c.allocatorMemoryBlockLists[i].incrementalSort = true
+			}
 		}
 	}
 }
 
 func (c *DefragmentationContext) completePassForBlockList(stateIndex int, blockList *memoryBlockList) (bool, error) {
-	c.mapTransfers = make(map[*deviceMemoryBlock]int, len(blockList.blocks))
+	c.mapTransfers.Clear()
 
 	done, err := c.context.BlockListCompletePass(stateIndex, blockList)
 
-	for block, mapCount := range c.mapTransfers {
-		_, _, err := block.memory.Map(mapCount, 0, -1, 0)
-		if err != nil {
-			panic(fmt.Sprintf("unexpected failure when attempting to transfer map references during defrag: %+v", err))
-		}
-	}
+	c.mapTransfers.Iter(
+		func(block *deviceMemoryBlock, mapCount int) bool {
+			_, _, err := block.memory.Map(mapCount, 0, -1, 0)
+			if err != nil {
+				panic(fmt.Sprintf("unexpected failure when attempting to transfer map references during defrag: %+v", err))
+			}
+
+			return false
+		})
 
 	return done, err
 }
 
-func (c *DefragmentationContext) completePassForMove(move *defrag.DefragmentationMove[Allocation]) error {
+func (c *DefragmentationContext) completePassForMove(move defrag.DefragmentationMove[Allocation]) error {
 
 	switch move.MoveOperation {
 	case defrag.DefragmentationMoveCopy:
-		mapCount, err := move.SrcAllocation.swapBlockAllocation(&move.DstTmpAllocation)
+		mapCount, err := move.SrcAllocation.swapBlockAllocation(move.DstTmpAllocation)
 		if err != nil {
 			return err
 		}
 
 		if mapCount > 0 {
-			existingMapCount, ok := c.mapTransfers[move.SrcAllocation.blockData.block]
+			existingMapCount, ok := c.mapTransfers.Get(move.SrcAllocation.blockData.block)
 			if ok {
-				c.mapTransfers[move.SrcAllocation.blockData.block] = existingMapCount + mapCount
+				c.mapTransfers.Put(move.SrcAllocation.blockData.block, existingMapCount+mapCount)
 			} else {
-				c.mapTransfers[move.SrcAllocation.blockData.block] = mapCount
+				c.mapTransfers.Put(move.SrcAllocation.blockData.block, mapCount)
 			}
 		}
 	case defrag.DefragmentationMoveDestroy:

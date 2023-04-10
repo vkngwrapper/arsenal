@@ -16,6 +16,7 @@ type BlockList[T any] interface {
 	Lock()
 	Unlock()
 
+	CreateAlloc() *T
 	CommitDefragAllocationRequest(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags memutils.AllocationCreateFlags, userData any, suballocType metadata.SuballocationType, outAlloc *T) (common.VkResult, error)
 	SwapBlocks(leftIndex, rightIndex int)
 }

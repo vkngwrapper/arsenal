@@ -3,6 +3,7 @@ package vam
 import (
 	"github.com/stretchr/testify/require"
 	"github.com/vkngwrapper/arsenal/memutils"
+	"github.com/vkngwrapper/arsenal/memutils/defrag"
 	"github.com/vkngwrapper/core/v2"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -102,7 +103,7 @@ func BenchmarkCreateAllocation(b *testing.B) {
 	}()
 	var alloc Allocation
 
-	b.ReportAllocs()
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		memReqs := core1_0.MemoryRequirements{
 			Size:           100,
@@ -187,5 +188,355 @@ func BenchmarkMapAlloc(b *testing.B) {
 
 		err = alloc.Unmap()
 		require.NoError(b, err)
+	}
+}
+
+func BenchmarkPoolAlloc(b *testing.B) {
+	instance, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	defer destroyApplication(b, instance, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+
+	pool, _, err := allocator.CreatePool(PoolCreateInfo{
+		Flags:     PoolCreateLinearAlgorithm,
+		BlockSize: 1000000,
+	})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, pool.Destroy())
+	}()
+
+	var alloc Allocation
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		memReqs := core1_0.MemoryRequirements{
+			Size:           100,
+			Alignment:      1,
+			MemoryTypeBits: 0xffffffff,
+		}
+
+		_, err = allocator.AllocateMemory(&memReqs, AllocationCreateInfo{
+			Pool: pool,
+		}, &alloc)
+		require.NoError(b, err)
+
+		require.NoError(b, alloc.Free())
+	}
+}
+
+func BenchmarkPoolAllocSlice(b *testing.B) {
+	instance, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	defer destroyApplication(b, instance, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+
+	pool, _, err := allocator.CreatePool(PoolCreateInfo{
+		Flags:     PoolCreateLinearAlgorithm,
+		BlockSize: 1000000,
+	})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, pool.Destroy())
+	}()
+
+	slice := make([]Allocation, 100)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		memReqs := core1_0.MemoryRequirements{
+			Size:           100,
+			Alignment:      1,
+			MemoryTypeBits: 0xffffffff,
+		}
+
+		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{
+			Pool: pool,
+		}, slice)
+		require.NoError(b, err)
+
+		require.NoError(b, allocator.FreeAllocationSlice(slice))
+	}
+}
+
+func BenchmarkAllocDedicated(b *testing.B) {
+	instance, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	defer destroyApplication(b, instance, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+	var alloc Allocation
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		memReqs := core1_0.MemoryRequirements{
+			Size:           100,
+			Alignment:      1,
+			MemoryTypeBits: 0xffffffff,
+		}
+
+		_, err = allocator.AllocateMemory(&memReqs, AllocationCreateInfo{
+			Flags: memutils.AllocationCreateDedicatedMemory,
+		}, &alloc)
+		require.NoError(b, err)
+
+		require.NoError(b, alloc.Free())
+	}
+}
+
+func BenchmarkAllocDefragFast(b *testing.B) {
+	instance, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	defer destroyApplication(b, instance, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+
+	memReqs := core1_0.MemoryRequirements{
+		Size:           10000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}
+
+	b.ResetTimer()
+	b.StopTimer()
+
+	for i := 0; i < b.N; i++ {
+		allocs := make([]Allocation, 1000)
+		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, allocs)
+		require.NoError(b, err)
+
+		for allocIndex := 0; allocIndex < 500; allocIndex++ {
+			err = allocs[allocIndex*2].Free()
+			require.NoError(b, err)
+		}
+
+		b.StartTimer()
+
+		var defragContext DefragmentationContext
+		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
+			Flags:                 DefragmentationFlagAlgorithmFast,
+			MaxAllocationsPerPass: 50,
+		}, &defragContext)
+		require.NoError(b, err)
+
+		var finished bool
+
+		for !finished {
+			_ = defragContext.BeginAllocationPass()
+			finished, err = defragContext.EndAllocationPass()
+			require.NoError(b, err)
+		}
+
+		var stats defrag.DefragmentationStats
+		defragContext.Finish(&stats)
+		require.Equal(b, stats.AllocationsMoved, 250)
+
+		b.StopTimer()
+		for allocIndex := 0; allocIndex < 500; allocIndex++ {
+			err = allocs[allocIndex*2+1].Free()
+			require.NoError(b, err)
+		}
+	}
+}
+
+func BenchmarkAllocDefragBalanced(b *testing.B) {
+	instance, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	defer destroyApplication(b, instance, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+
+	memReqs := core1_0.MemoryRequirements{
+		Size:           10000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}
+
+	b.ResetTimer()
+	b.StopTimer()
+
+	for i := 0; i < b.N; i++ {
+		allocs := make([]Allocation, 1000)
+		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, allocs)
+		require.NoError(b, err)
+
+		for allocIndex := 0; allocIndex < 500; allocIndex++ {
+			err = allocs[allocIndex*2].Free()
+			require.NoError(b, err)
+		}
+
+		b.StartTimer()
+
+		var defragContext DefragmentationContext
+		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
+			Flags:                 DefragmentationFlagAlgorithmBalanced,
+			MaxAllocationsPerPass: 50,
+		}, &defragContext)
+		require.NoError(b, err)
+
+		var finished bool
+
+		for !finished {
+			_ = defragContext.BeginAllocationPass()
+			finished, err = defragContext.EndAllocationPass()
+			require.NoError(b, err)
+		}
+
+		var stats defrag.DefragmentationStats
+		defragContext.Finish(&stats)
+		require.Equal(b, stats.AllocationsMoved, 250)
+
+		b.StopTimer()
+		for allocIndex := 0; allocIndex < 500; allocIndex++ {
+			err = allocs[allocIndex*2+1].Free()
+			require.NoError(b, err)
+		}
+	}
+}
+
+func BenchmarkAllocDefragExtensive(b *testing.B) {
+	instance, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	defer destroyApplication(b, instance, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+
+	memReqs := core1_0.MemoryRequirements{
+		Size:           10000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}
+
+	b.ResetTimer()
+	b.StopTimer()
+
+	for i := 0; i < b.N; i++ {
+		allocs := make([]Allocation, 5000)
+		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, allocs)
+		require.NoError(b, err)
+
+		for allocIndex := 0; allocIndex < 2500; allocIndex++ {
+			err = allocs[allocIndex*2].Free()
+			require.NoError(b, err)
+		}
+
+		b.StartTimer()
+
+		var defragContext DefragmentationContext
+		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
+			Flags:                 DefragmentationFlagAlgorithmExtensive,
+			MaxAllocationsPerPass: 50,
+		}, &defragContext)
+		require.NoError(b, err)
+
+		var finished bool
+
+		for !finished {
+			_ = defragContext.BeginAllocationPass()
+			finished, err = defragContext.EndAllocationPass()
+			require.NoError(b, err)
+		}
+
+		var stats defrag.DefragmentationStats
+		defragContext.Finish(&stats)
+		require.Equal(b, stats.AllocationsMoved, 1250)
+
+		b.StopTimer()
+		for allocIndex := 0; allocIndex < 2500; allocIndex++ {
+			err = allocs[allocIndex*2+1].Free()
+			require.NoError(b, err)
+		}
+	}
+}
+
+func BenchmarkAllocDefragBig(b *testing.B) {
+	instance, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	defer destroyApplication(b, instance, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+
+	memReqs := core1_0.MemoryRequirements{
+		Size:           10000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}
+
+	b.ResetTimer()
+	b.StopTimer()
+
+	for i := 0; i < b.N; i++ {
+		allocs := make([]Allocation, 50000)
+		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, allocs)
+		require.NoError(b, err)
+
+		for allocIndex := 0; allocIndex < 25000; allocIndex++ {
+			err = allocs[allocIndex*2].Free()
+			require.NoError(b, err)
+		}
+
+		b.StartTimer()
+
+		var defragContext DefragmentationContext
+		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
+			Flags:                 DefragmentationFlagAlgorithmFull,
+			MaxAllocationsPerPass: 50,
+		}, &defragContext)
+		require.NoError(b, err)
+
+		var finished bool
+
+		for !finished {
+			_ = defragContext.BeginAllocationPass()
+			finished, err = defragContext.EndAllocationPass()
+			require.NoError(b, err)
+		}
+
+		var stats defrag.DefragmentationStats
+		defragContext.Finish(&stats)
+		require.Equal(b, stats.AllocationsMoved, 12500)
+
+		b.StopTimer()
+		for allocIndex := 0; allocIndex < 25000; allocIndex++ {
+			err = allocs[allocIndex*2+1].Free()
+			require.NoError(b, err)
+		}
 	}
 }

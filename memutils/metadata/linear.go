@@ -599,8 +599,8 @@ func (m *LinearBlockMetadata) FindNextFreeRegionSize(allocHandle BlockAllocation
 
 func (m *LinearBlockMetadata) Clear() {
 	m.sumFreeSize = m.size
-	m.suballocations0 = []Suballocation{}
-	m.suballocations1 = []Suballocation{}
+	m.suballocations0 = m.suballocations0[:0]
+	m.suballocations1 = m.suballocations1[:0]
 	m.secondVectorMode = SecondVectorModeEmpty
 	m.firstNullItemsMiddleCount = 0
 	m.firstNullItemsBeginCount = 0
@@ -673,8 +673,8 @@ func (m *LinearBlockMetadata) cleanupAfterFree() {
 	secondVector := *secondVectorPtr
 
 	if m.IsEmpty() {
-		m.suballocations0 = []Suballocation{}
-		m.suballocations1 = []Suballocation{}
+		m.suballocations0 = m.suballocations0[:0]
+		m.suballocations1 = m.suballocations1[:0]
 		m.firstNullItemsBeginCount = 0
 		m.firstNullItemsMiddleCount = 0
 		m.secondNullItemsCount = 0

@@ -386,6 +386,9 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 				if currentBlock == nil {
 					panic(fmt.Sprintf("a memory block at index %d is unexpectedly nil", blockIndex))
 				}
+				if currentBlock.metadata.SumFreeSize() < size {
+					continue
+				}
 
 				res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 				if err == nil {
@@ -752,6 +755,10 @@ func (l *memoryBlockList) CommitDefragAllocationRequest(allocRequest metadata.Al
 		suballocType,
 		outAlloc,
 	)
+}
+
+func (l *memoryBlockList) CreateAlloc() *Allocation {
+	return &Allocation{}
 }
 
 func (l *memoryBlockList) MoveDataForUserData(userData any) defrag.MoveAllocationData[Allocation] {
