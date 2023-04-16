@@ -64,7 +64,7 @@ type CreateOptions struct {
 	// HeapSizeLimits can be left empty. If it is provided, though, it must be a slice
 	// with a number of entries corresponding to the number of heaps in the PhysicalDevice
 	// used to create this Allocator. Each entry must be either the maximum number of bytes
-	// that should be allocated from the corresponding device memory heap, or -1 indicating
+	// that should be allocated from the corresponding device memory heap, or 0 indicating
 	// no limit.
 	//
 	// Heap memory limits will be enforced at runtime (the allocator will go so far as to
