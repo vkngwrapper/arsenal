@@ -22,7 +22,7 @@ type BlockMetadata interface {
 
 	IsEmpty() bool
 
-	VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool))
+	VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error) error
 	AllocationListBegin() (BlockAllocationHandle, error)
 	FindNextAllocation(allocHandle BlockAllocationHandle) (BlockAllocationHandle, error)
 	FindNextFreeRegionSize(allocHandle BlockAllocationHandle) (int, error)

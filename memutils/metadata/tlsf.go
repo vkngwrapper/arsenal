@@ -149,7 +149,7 @@ func (m *TLSFBlockMetadata) Validate() error {
 
 	calculatedSize := m.nullBlock.size
 	calculatedFreeSize := m.nullBlock.size
-	var allocCount, freeCount int
+	var allocCount, freeCount, freeListCount int
 
 	// Check integrity of free lists
 	for listIndex := 0; listIndex < len(m.freeList); listIndex++ {
@@ -165,6 +165,8 @@ func (m *TLSFBlockMetadata) Validate() error {
 		if block.prevFree != nil {
 			return errors.Newf("block at offset %d is the head of a free list but has a previous block", block.offset)
 		}
+
+		freeListCount++
 		for block.nextFree != nil {
 			if !block.nextFree.IsFree() {
 				return errors.Newf("block at offset %d is in the free list but it is not free", block.nextFree.offset)
@@ -173,6 +175,7 @@ func (m *TLSFBlockMetadata) Validate() error {
 				return errors.Newf("block at offset %d lists the block at offset %d as its next block, but the reverse reference is broken", block.offset, block.nextFree.offset)
 			}
 
+			freeListCount++
 			block = block.nextFree
 		}
 	}
@@ -195,36 +198,13 @@ func (m *TLSFBlockMetadata) Validate() error {
 
 		nextOffset = prev.offset
 		calculatedSize += prev.size
-		listIndex := m.getListIndexFromSize(prev.size)
-		freeBlock := m.freeList[listIndex]
+
 		if prev.IsFree() {
 			freeCount++
-
-			// Does the free block belong to the free list?
-			var found bool
-			for !found && freeBlock != nil {
-				if freeBlock == prev {
-					found = true
-				}
-
-				freeBlock = freeBlock.nextFree
-			}
-
-			if !found {
-				return errors.Newf("free block with offset %d should have free list index %d but it was not present", prev.offset, listIndex)
-			}
 
 			calculatedFreeSize += prev.size
 		} else {
 			allocCount++
-
-			// Ensure the block is not on the free list
-			for freeBlock != nil {
-				if freeBlock == prev {
-					return errors.Newf("taken block with offset %d appeared in the free list at index %d", prev.offset, listIndex)
-				}
-				freeBlock = freeBlock.nextFree
-			}
 
 			if !m.isVirtual {
 				err := m.granularityHandler.validate(validateCtx, prev.offset, prev.size)
@@ -237,6 +217,10 @@ func (m *TLSFBlockMetadata) Validate() error {
 		if prev.prevPhysical != nil && prev.prevPhysical.nextPhysical != prev {
 			return errors.Newf("block at offset %d has a previous physical block, but the reverse reference is broken", prev.offset)
 		}
+	}
+
+	if freeListCount != freeCount {
+		return errors.Newf("the number of free blocks in the physical list and the number of blocks in the free list do not match! free list size: %d, physical list free blocks: %d", freeListCount, freeCount)
 	}
 
 	if !m.isVirtual {
@@ -365,6 +349,8 @@ func (m *TLSFBlockMetadata) CreateAllocationRequest(
 	if upperAddress {
 		return false, allocRequest, errors.New("AllocationCreateUpperAddress can only be used with the Linear algorithm")
 	}
+
+	memutils.DebugValidate(m)
 
 	// Round up granularity
 	if !m.isVirtual {
@@ -937,10 +923,15 @@ func (m *TLSFBlockMetadata) mergeBlock(block *tlsfBlock, prev *tlsfBlock) {
 	m.freeBlock(prev)
 }
 
-func (m *TLSFBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool)) {
+func (m *TLSFBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error) error {
 	for block := m.nullBlock; block != nil; block = block.prevPhysical {
-		handleBlock(block.blockHandle, block.offset, block.size, block.userData, block.IsFree())
+		err := handleBlock(block.blockHandle, block.offset, block.size, block.userData, block.IsFree())
+		if err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 func (m *TLSFBlockMetadata) AllocationListBegin() (BlockAllocationHandle, error) {

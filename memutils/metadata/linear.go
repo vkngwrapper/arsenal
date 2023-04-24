@@ -210,7 +210,7 @@ func (m *LinearBlockMetadata) FreeRegionsCount() int {
 	return math.MaxInt
 }
 
-func (m *LinearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool)) {
+func (m *LinearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error) error {
 	size := m.Size()
 	firstVector := *m.accessSuballocationsFirst()
 	secondVector := *m.accessSuballocationsSecond()
@@ -233,11 +233,17 @@ func (m *LinearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAlloca
 				// Process all the free space before the allocation
 				if lastOffset < suballoc.Offset {
 					// There was free space since the last taken allocation
-					handleBlock(BlockAllocationHandle(lastOffset), lastOffset, suballoc.Offset-lastOffset, nil, true)
+					err := handleBlock(BlockAllocationHandle(lastOffset), lastOffset, suballoc.Offset-lastOffset, nil, true)
+					if err != nil {
+						return err
+					}
 				}
 
 				// Process the allocation
-				handleBlock(BlockAllocationHandle(suballoc.Offset), suballoc.Offset, suballoc.Size, suballoc.UserData, false)
+				err := handleBlock(BlockAllocationHandle(suballoc.Offset), suballoc.Offset, suballoc.Size, suballoc.UserData, false)
+				if err != nil {
+					return err
+				}
 
 				// Iterate
 				lastOffset = suballoc.Offset + suballoc.Size
@@ -245,7 +251,10 @@ func (m *LinearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAlloca
 			} else {
 				// Process free space after the final allocation
 				if lastOffset < freeSpaceSecondToFirstEnd {
-					handleBlock(BlockAllocationHandle(lastOffset), lastOffset, freeSpaceSecondToFirstEnd-lastOffset, nil, true)
+					err := handleBlock(BlockAllocationHandle(lastOffset), lastOffset, freeSpaceSecondToFirstEnd-lastOffset, nil, true)
+					if err != nil {
+						return err
+					}
 				}
 
 				lastOffset = freeSpaceSecondToFirstEnd
@@ -276,18 +285,27 @@ func (m *LinearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAlloca
 			// Process free space before the allocation
 			if lastOffset < suballoc.Offset {
 				// There was free space since the last taken allocation
-				handleBlock(BlockAllocationHandle(lastOffset), lastOffset, suballoc.Offset-lastOffset, nil, true)
+				err := handleBlock(BlockAllocationHandle(lastOffset), lastOffset, suballoc.Offset-lastOffset, nil, true)
+				if err != nil {
+					return err
+				}
 			}
 
 			// Process this allocation
-			handleBlock(BlockAllocationHandle(suballoc.Offset), suballoc.Offset, suballoc.Size, suballoc.UserData, false)
+			err := handleBlock(BlockAllocationHandle(suballoc.Offset), suballoc.Offset, suballoc.Size, suballoc.UserData, false)
+			if err != nil {
+				return err
+			}
 
 			// Iterate
 			lastOffset = suballoc.Offset + suballoc.Size
 			nextAllocFirstIndex++
 		} else {
 			// Process free space after the final allocation
-			handleBlock(BlockAllocationHandle(lastOffset), lastOffset, freeSpaceFirstToSecondEnd-lastOffset, nil, true)
+			err := handleBlock(BlockAllocationHandle(lastOffset), lastOffset, freeSpaceFirstToSecondEnd-lastOffset, nil, true)
+			if err != nil {
+				return err
+			}
 
 			lastOffset = freeSpaceFirstToSecondEnd
 		}
@@ -307,36 +325,49 @@ func (m *LinearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAlloca
 
 				// Process free space before the allocation
 				if lastOffset < suballoc.Offset {
-					handleBlock(BlockAllocationHandle(lastOffset), lastOffset, suballoc.Offset-lastOffset, nil, true)
+					err := handleBlock(BlockAllocationHandle(lastOffset), lastOffset, suballoc.Offset-lastOffset, nil, true)
+					if err != nil {
+						return err
+					}
 				}
 
 				// Process this allocation
-				handleBlock(BlockAllocationHandle(suballoc.Offset), suballoc.Offset, suballoc.Size, suballoc.UserData, false)
+				err := handleBlock(BlockAllocationHandle(suballoc.Offset), suballoc.Offset, suballoc.Size, suballoc.UserData, false)
+				if err != nil {
+					return err
+				}
 
 				// Iterate
 				lastOffset = suballoc.Offset + suballoc.Size
 				nextAllocSecondIndex--
 			} else {
 				// Process free space after the final allocation
-				handleBlock(BlockAllocationHandle(lastOffset), lastOffset, size-lastOffset, nil, true)
+				err := handleBlock(BlockAllocationHandle(lastOffset), lastOffset, size-lastOffset, nil, true)
+				if err != nil {
+					return err
+				}
 
 				lastOffset = size
 			}
 		}
 	}
+
+	return nil
 }
 
 func (m *LinearBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStatistics) {
 	stats.Statistics.BlockCount++
 	stats.Statistics.BlockBytes += m.Size()
 
-	m.VisitAllBlocks(
-		func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) {
+	_ = m.VisitAllBlocks(
+		func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error {
 			if free {
 				stats.AddUnusedRange(size)
 			} else {
 				stats.AddAllocation(size)
 			}
+
+			return nil
 		})
 }
 
@@ -347,11 +378,13 @@ func (m *LinearBlockMetadata) AddStatistics(stats *memutils.Statistics) {
 	stats.BlockBytes += size
 	stats.AllocationBytes += size - m.sumFreeSize
 
-	m.VisitAllBlocks(
-		func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) {
+	_ = m.VisitAllBlocks(
+		func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error {
 			if !free {
 				stats.AllocationCount++
 			}
+
+			return nil
 		})
 }
 
@@ -360,14 +393,16 @@ func (m *LinearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) e
 	size := m.Size()
 	var unusedRangeCount, usedBytes, allocCount int
 
-	m.VisitAllBlocks(
-		func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) {
+	_ = m.VisitAllBlocks(
+		func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error {
 			if free {
 				unusedRangeCount++
 			} else {
 				usedBytes += size
 				allocCount++
 			}
+
+			return nil
 		})
 
 	unusedBytes := size - usedBytes
@@ -388,6 +423,7 @@ func (m *LinearBlockMetadata) CreateAllocationRequest(
 	if allocType == SuballocationFree {
 		return false, AllocationRequest{}, errors.New("allocation type cannot be SuballocationFree")
 	}
+	memutils.DebugValidate(m)
 
 	allocRequest := AllocationRequest{
 		Size: allocSize,
