@@ -53,29 +53,6 @@ func (m defragmentOperation) String() string {
 	return defragOperationMapping[m]
 }
 
-type stateBalanced[T any] struct {
-	AverageFreeSize  int
-	AverageAllocSize int
-}
-
-func (s *stateBalanced[T]) UpdateStatistics(blockList BlockList[T]) {
-	s.AverageFreeSize = 0
-	s.AverageAllocSize = 0
-
-	var allocCount, freeCount int
-	for i := 0; i < blockList.BlockCount(); i++ {
-		metadata := blockList.MetadataForBlock(i)
-
-		allocCount += metadata.AllocationCount()
-		freeCount += metadata.FreeRegionsCount()
-		s.AverageFreeSize += metadata.SumFreeSize()
-		s.AverageAllocSize += metadata.Size()
-	}
-
-	s.AverageAllocSize = (s.AverageAllocSize - s.AverageFreeSize) / allocCount
-	s.AverageFreeSize /= freeCount
-}
-
 type stateExtensive struct {
 	Operation      defragmentOperation
 	FirstFreeBlock int

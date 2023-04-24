@@ -14,14 +14,12 @@ type Algorithm uint32
 
 const (
 	AlgorithmFast Algorithm = iota + 1
-	AlgorithmBalanced
 	AlgorithmFull
 	AlgorithmExtensive
 )
 
 var algorithmMapping = map[Algorithm]string{
 	AlgorithmFast:      "AlgorithmFast",
-	AlgorithmBalanced:  "AlgorithmBalanced",
 	AlgorithmFull:      "AlgorithmFull",
 	AlgorithmExtensive: "AlgorithmExtensive",
 }
@@ -46,7 +44,6 @@ type MetadataDefragContext[T any] struct {
 	moves         []DefragmentationMove[T]
 	ignoredAllocs int
 
-	balancedStates      []stateBalanced[T]
 	extensiveStates     []stateExtensive
 	immovableBlockCount int
 
@@ -63,15 +60,13 @@ func (c *MetadataDefragContext[T]) Init(blockListCount int) {
 		c.MaxPassAllocations = math.MaxInt
 	}
 
-	c.balancedStates = make([]stateBalanced[T], blockListCount)
 	c.extensiveStates = make([]stateExtensive, blockListCount)
 	for i := 0; i < blockListCount; i++ {
-		c.balancedStates[i].AverageAllocSize = math.MaxInt
 		c.extensiveStates[i].FirstFreeBlock = math.MaxInt
 	}
 
 	if c.Algorithm == 0 {
-		c.Algorithm = AlgorithmBalanced
+		c.Algorithm = AlgorithmFull
 	}
 }
 
@@ -477,8 +472,6 @@ func (c *MetadataDefragContext[T]) computeDefragmentation(blockList BlockList[T]
 	switch c.Algorithm {
 	case AlgorithmFast:
 		return c.computeDefragmentationFast(blockList)
-	case AlgorithmBalanced:
-		return c.computeDefragmentationBalanced(blockList, stateIndex, true)
 	case AlgorithmFull:
 		return c.computeDefragmentationFull(blockList)
 	case AlgorithmExtensive:
@@ -502,65 +495,6 @@ func (c *MetadataDefragContext[T]) computeDefragmentationFast(blockList BlockLis
 		if c.walkSuballocations(blockList, i, mtdata, c.defragFastSuballocHandler) {
 			return true
 		}
-	}
-
-	return false
-}
-
-func (c *MetadataDefragContext[T]) computeDefragmentationBalanced(blockList BlockList[T], stateIndex int, update bool) bool {
-	// Go over every allocation and try to fit it in previous blocks at lowest offsets,
-	// if not possible: realloc within single block to minimize offset (exclude offset == 0),
-	// but only if there are noticeable gaps between them
-
-	state := &c.balancedStates[stateIndex]
-	if update && state.AverageAllocSize == math.MaxInt {
-		state.UpdateStatistics(blockList)
-	}
-
-	startMoveCount := len(c.moves)
-	minimalFreeRegion := state.AverageFreeSize / 2
-
-	for i := blockList.BlockCount() - 1; i > c.immovableBlockCount; i-- {
-		mtdata := blockList.MetadataForBlock(i)
-
-		var prevFreeRegionSize int
-
-		if c.walkSuballocations(blockList, i, mtdata,
-			func(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool {
-				// Check all previous blocks for free space
-				prevMoveCount := len(c.moves)
-				if c.allocInOtherBlock(0, i, &moveData, blockList) {
-					return true
-				}
-
-				nextFreeRegionSize := c.mustFindNextFreeRegionSize(mtdata, handle)
-				// If no room found then realloc within block for lower offset
-				offset := c.mustFindOffset(mtdata, handle)
-
-				// Check if realloc will make sense
-				if prevMoveCount == len(c.moves) &&
-					offset != 0 && mtdata.SumFreeSize() >= moveData.Move.Size &&
-					(prevFreeRegionSize >= minimalFreeRegion ||
-						nextFreeRegionSize >= minimalFreeRegion ||
-						moveData.Move.Size <= state.AverageFreeSize ||
-						moveData.Move.Size <= state.AverageAllocSize) {
-
-					if c.allocIfLowerOffset(offset, blockList, i, mtdata, handle, &moveData) {
-						return true
-					}
-				}
-
-				prevFreeRegionSize = nextFreeRegionSize
-				return false
-			}) {
-			return true
-		}
-	}
-
-	// No moves performed, update statistics to current state
-	if startMoveCount == len(c.moves) && !update {
-		state.AverageAllocSize = math.MaxInt
-		return c.computeDefragmentationBalanced(blockList, stateIndex, false)
 	}
 
 	return false
