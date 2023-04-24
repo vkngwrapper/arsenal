@@ -13,19 +13,16 @@ type DefragmentationFlags uint32
 
 const (
 	DefragmentationFlagAlgorithmFast DefragmentationFlags = 1 << iota
-	DefragmentationFlagAlgorithmBalanced
 	DefragmentationFlagAlgorithmFull
 	DefragmentationFlagAlgorithmExtensive
 
 	DefragmentationFlagAlgorithmMask = DefragmentationFlagAlgorithmFast |
-		DefragmentationFlagAlgorithmBalanced |
 		DefragmentationFlagAlgorithmFull |
 		DefragmentationFlagAlgorithmExtensive
 )
 
 var defragmentationFlagsMapping = map[DefragmentationFlags]string{
 	DefragmentationFlagAlgorithmFast:      "DefragmentationFlagAlgorithmFast",
-	DefragmentationFlagAlgorithmBalanced:  "DefragmentationFlagAlgorithmBalanced",
 	DefragmentationFlagAlgorithmFull:      "DefragmentationFlagAlgorithmFull",
 	DefragmentationFlagAlgorithmExtensive: "DefragmentationFlagAlgorithmExtensive",
 }
@@ -62,8 +59,6 @@ func (c *DefragmentationContext) init(blockListCount int, o *DefragmentationInfo
 	switch algorithm {
 	case DefragmentationFlagAlgorithmFast:
 		c.context.Algorithm = defrag.AlgorithmFast
-	case 0, DefragmentationFlagAlgorithmBalanced:
-		c.context.Algorithm = defrag.AlgorithmBalanced
 	case DefragmentationFlagAlgorithmFull:
 		c.context.Algorithm = defrag.AlgorithmFull
 	case DefragmentationFlagAlgorithmExtensive:
