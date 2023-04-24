@@ -2,6 +2,7 @@ package vam
 
 import (
 	"github.com/cockroachdb/errors"
+	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"golang.org/x/exp/slog"
 )
@@ -55,6 +56,7 @@ func (p *Pool) Destroy() error {
 }
 
 func (p *Pool) destroyAfterLock() error {
+	memutils.DebugValidate(&p.dedicatedAllocations)
 	if p.dedicatedAllocations.count > 0 {
 		return errors.Newf("the pool still has %d dedicated allocations that remain unfreed", p.dedicatedAllocations.count)
 	}

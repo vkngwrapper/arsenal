@@ -198,8 +198,11 @@ func (a *Allocator) Destroy() error {
 	defer a.poolsMutex.Unlock()
 
 	for memoryTypeIndex := 0; memoryTypeIndex < a.deviceMemory.MemoryTypeCount(); memoryTypeIndex++ {
-		if a.dedicatedAllocations[memoryTypeIndex] != nil && !a.dedicatedAllocations[memoryTypeIndex].IsEmpty() {
-			return errors.Newf("the allocator still has %d unfreed dedicated allocations for memory type %d", a.dedicatedAllocations[memoryTypeIndex].count, memoryTypeIndex)
+		if a.dedicatedAllocations[memoryTypeIndex] != nil {
+			memutils.DebugValidate(a.dedicatedAllocations[memoryTypeIndex])
+			if !a.dedicatedAllocations[memoryTypeIndex].IsEmpty() {
+				return errors.Newf("the allocator still has %d unfreed dedicated allocations for memory type %d", a.dedicatedAllocations[memoryTypeIndex].count, memoryTypeIndex)
+			}
 		}
 
 		if a.memoryBlockLists[memoryTypeIndex] != nil && !a.memoryBlockLists[memoryTypeIndex].HasNoAllocations() {

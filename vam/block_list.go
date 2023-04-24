@@ -529,6 +529,7 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 		panic(fmt.Sprintf("unexpected error when freeing allocation with handle %+v in metadata: %+v", alloc.blockData.handle, err))
 	}
 	block.memory.RecordSuballocSubfree()
+	memutils.DebugValidate(block)
 
 	l.logger.LogAttrs(nil, slog.LevelDebug, "    Freed from block", slog.Int("MemoryTypeIndex", l.memoryTypeIndex))
 
@@ -633,6 +634,7 @@ func (l *memoryBlockList) commitAllocationRequest(allocRequest metadata.Allocati
 	}
 
 	outAlloc.initBlockAllocation(block, allocRequest.BlockAllocationHandle, alignment, allocRequest.Size, l.memoryTypeIndex, suballocType, mapped)
+
 	outAlloc.SetUserData(userData)
 	heapIndex := l.deviceMemory.MemoryTypeIndexToHeapIndex(l.memoryTypeIndex)
 	l.deviceMemory.AddAllocation(heapIndex, allocRequest.Size)
@@ -679,8 +681,8 @@ func (l *memoryBlockList) printDetailedMapAllocations(md metadata.BlockMetadata,
 	defer arrayState.End()
 
 	// Second pass
-	md.VisitAllBlocks(
-		func(handle metadata.BlockAllocationHandle, offset int, size int, userData any, free bool) {
+	_ = md.VisitAllBlocks(
+		func(handle metadata.BlockAllocationHandle, offset int, size int, userData any, free bool) error {
 			if free {
 				obj := arrayState.Object()
 				defer obj.End()
@@ -706,6 +708,8 @@ func (l *memoryBlockList) printDetailedMapAllocations(md metadata.BlockMetadata,
 					obj.Name("CustomData").String(fmt.Sprintf("%+v", userData))
 				}
 			}
+
+			return nil
 		})
 
 }

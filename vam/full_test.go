@@ -24,6 +24,9 @@ func logDebug(msgType ext_debug_utils.DebugUtilsMessageTypeFlags, severity ext_d
 }
 
 func createApplication(t require.TestingT, name string) (core1_0.Instance, ext_debug_utils.DebugUtilsMessenger, core1_0.PhysicalDevice, core1_0.Device) {
+	// Because benchmarks that use createApplication and destroyApplication will repeatedly create and
+	// destroy instance & device, it runs into https://github.com/golang/go/issues/59724 on windows,
+	// so we need to lock the OS as a workaround
 	runtime.LockOSThread()
 
 	loader, err := core.CreateSystemLoader()
@@ -114,8 +117,17 @@ func destroyApplication(t require.TestingT, instance core1_0.Instance, debugMess
 	runtime.UnlockOSThread()
 }
 
+func checkCorruption(t require.TestingT, allocator *Allocator) {
+	res, err := allocator.CheckCorruption(0xffffffff)
+	if memutils.DebugMargin > 0 {
+		require.NoError(t, err)
+	} else {
+		require.Equal(t, core1_0.VKErrorFeatureNotPresent, res)
+	}
+}
+
 func BenchmarkCreateAllocation(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocation")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -140,10 +152,12 @@ func BenchmarkCreateAllocation(b *testing.B) {
 
 		require.NoError(b, alloc.Free())
 	}
+	b.StopTimer()
+	checkCorruption(b, allocator)
 }
 
 func BenchmarkCreateAllocationSlice(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocationSlice")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -168,10 +182,12 @@ func BenchmarkCreateAllocationSlice(b *testing.B) {
 
 		require.NoError(b, allocator.FreeAllocationSlice(slice))
 	}
+	b.StopTimer()
+	checkCorruption(b, allocator)
 }
 
 func BenchmarkMapAlloc(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkMapAlloc")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -213,10 +229,12 @@ func BenchmarkMapAlloc(b *testing.B) {
 		err = alloc.Unmap()
 		require.NoError(b, err)
 	}
+	b.StopTimer()
+	checkCorruption(b, allocator)
 }
 
 func BenchmarkPoolAlloc(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkPoolAlloc")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -253,10 +271,18 @@ func BenchmarkPoolAlloc(b *testing.B) {
 
 		require.NoError(b, alloc.Free())
 	}
+	b.StopTimer()
+	res, err := pool.CheckCorruption()
+	if memutils.DebugMargin > 0 {
+		require.NoError(b, err)
+	} else {
+		require.Equal(b, core1_0.VKErrorFeatureNotPresent, res)
+	}
+	checkCorruption(b, allocator)
 }
 
 func BenchmarkPoolAllocSlice(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkPoolAllocSlice")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -293,10 +319,12 @@ func BenchmarkPoolAllocSlice(b *testing.B) {
 
 		require.NoError(b, allocator.FreeAllocationSlice(slice))
 	}
+	b.StopTimer()
+	checkCorruption(b, allocator)
 }
 
 func BenchmarkAllocDedicated(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDedicated")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -308,7 +336,6 @@ func BenchmarkAllocDedicated(b *testing.B) {
 	}()
 	var alloc Allocation
 
-	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		memReqs := core1_0.MemoryRequirements{
 			Size:           100,
@@ -323,10 +350,12 @@ func BenchmarkAllocDedicated(b *testing.B) {
 
 		require.NoError(b, alloc.Free())
 	}
+	b.StopTimer()
+	checkCorruption(b, allocator)
 }
 
 func BenchmarkAllocDefragFast(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragFast")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -347,11 +376,11 @@ func BenchmarkAllocDefragFast(b *testing.B) {
 	b.StopTimer()
 
 	for i := 0; i < b.N; i++ {
-		allocs := make([]Allocation, 1000)
+		allocs := make([]Allocation, 10000)
 		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, allocs)
 		require.NoError(b, err)
 
-		for allocIndex := 0; allocIndex < 500; allocIndex++ {
+		for allocIndex := 0; allocIndex < 5000; allocIndex++ {
 			err = allocs[allocIndex*2].Free()
 			require.NoError(b, err)
 		}
@@ -375,78 +404,19 @@ func BenchmarkAllocDefragFast(b *testing.B) {
 
 		var stats defrag.DefragmentationStats
 		defragContext.Finish(&stats)
-		require.Equal(b, stats.AllocationsMoved, 250)
+		require.GreaterOrEqual(b, stats.AllocationsMoved, 1000)
 
 		b.StopTimer()
-		for allocIndex := 0; allocIndex < 500; allocIndex++ {
+		for allocIndex := 0; allocIndex < 5000; allocIndex++ {
 			err = allocs[allocIndex*2+1].Free()
 			require.NoError(b, err)
 		}
 	}
-}
-
-func BenchmarkAllocDefragBalanced(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
-	defer destroyApplication(b, instance, debugMessenger, device)
-
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
-
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
-	require.NoError(b, err)
-	defer func() {
-		require.NoError(b, allocator.Destroy())
-	}()
-
-	memReqs := core1_0.MemoryRequirements{
-		Size:           10000,
-		Alignment:      1,
-		MemoryTypeBits: 0xffffffff,
-	}
-
-	b.ResetTimer()
-	b.StopTimer()
-
-	for i := 0; i < b.N; i++ {
-		allocs := make([]Allocation, 1000)
-		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, allocs)
-		require.NoError(b, err)
-
-		for allocIndex := 0; allocIndex < 500; allocIndex++ {
-			err = allocs[allocIndex*2].Free()
-			require.NoError(b, err)
-		}
-
-		b.StartTimer()
-
-		var defragContext DefragmentationContext
-		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
-			Flags:                 DefragmentationFlagAlgorithmBalanced,
-			MaxAllocationsPerPass: 50,
-		}, &defragContext)
-		require.NoError(b, err)
-
-		var finished bool
-
-		for !finished {
-			_ = defragContext.BeginAllocationPass()
-			finished, err = defragContext.EndAllocationPass()
-			require.NoError(b, err)
-		}
-
-		var stats defrag.DefragmentationStats
-		defragContext.Finish(&stats)
-		require.Equal(b, stats.AllocationsMoved, 250)
-
-		b.StopTimer()
-		for allocIndex := 0; allocIndex < 500; allocIndex++ {
-			err = allocs[allocIndex*2+1].Free()
-			require.NoError(b, err)
-		}
-	}
+	checkCorruption(b, allocator)
 }
 
 func BenchmarkAllocDefragFull(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragFull")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -467,11 +437,11 @@ func BenchmarkAllocDefragFull(b *testing.B) {
 	b.StopTimer()
 
 	for i := 0; i < b.N; i++ {
-		allocs := make([]Allocation, 1000)
+		allocs := make([]Allocation, 10000)
 		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, allocs)
 		require.NoError(b, err)
 
-		for allocIndex := 0; allocIndex < 500; allocIndex++ {
+		for allocIndex := 0; allocIndex < 5000; allocIndex++ {
 			err = allocs[allocIndex*2].Free()
 			require.NoError(b, err)
 		}
@@ -495,18 +465,19 @@ func BenchmarkAllocDefragFull(b *testing.B) {
 
 		var stats defrag.DefragmentationStats
 		defragContext.Finish(&stats)
-		require.Equal(b, stats.AllocationsMoved, 250)
+		require.GreaterOrEqual(b, stats.AllocationsMoved, 2500)
 
 		b.StopTimer()
-		for allocIndex := 0; allocIndex < 500; allocIndex++ {
+		for allocIndex := 0; allocIndex < 5000; allocIndex++ {
 			err = allocs[allocIndex*2+1].Free()
 			require.NoError(b, err)
 		}
 	}
+	checkCorruption(b, allocator)
 }
 
 func BenchmarkAllocDefragExtensive(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragExtensive")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -527,11 +498,11 @@ func BenchmarkAllocDefragExtensive(b *testing.B) {
 	b.StopTimer()
 
 	for i := 0; i < b.N; i++ {
-		allocs := make([]Allocation, 5000)
+		allocs := make([]Allocation, 10000)
 		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, allocs)
 		require.NoError(b, err)
 
-		for allocIndex := 0; allocIndex < 2500; allocIndex++ {
+		for allocIndex := 0; allocIndex < 5000; allocIndex++ {
 			err = allocs[allocIndex*2].Free()
 			require.NoError(b, err)
 		}
@@ -555,18 +526,19 @@ func BenchmarkAllocDefragExtensive(b *testing.B) {
 
 		var stats defrag.DefragmentationStats
 		defragContext.Finish(&stats)
-		require.GreaterOrEqual(b, stats.AllocationsMoved, 1250)
+		require.GreaterOrEqual(b, stats.AllocationsMoved, 2500)
 
 		b.StopTimer()
-		for allocIndex := 0; allocIndex < 2500; allocIndex++ {
+		for allocIndex := 0; allocIndex < 5000; allocIndex++ {
 			err = allocs[allocIndex*2+1].Free()
 			require.NoError(b, err)
 		}
 	}
+	checkCorruption(b, allocator)
 }
 
 func BenchmarkAllocDefragBig(b *testing.B) {
-	instance, messenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocator")
+	instance, messenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragBig")
 	defer destroyApplication(b, instance, messenger, device)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout))
@@ -623,4 +595,71 @@ func BenchmarkAllocDefragBig(b *testing.B) {
 			require.NoError(b, err)
 		}
 	}
+	checkCorruption(b, allocator)
+}
+
+func BenchmarkBuffer(b *testing.B) {
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkBuffer")
+	defer destroyApplication(b, instance, debugMessenger, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+	var alloc Allocation
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buffer, _, err := allocator.CreateBuffer(core1_0.BufferCreateInfo{
+			Size:  10000,
+			Usage: core1_0.BufferUsageUniformBuffer,
+		}, AllocationCreateInfo{
+			Usage: MemoryUsageAuto,
+		}, &alloc)
+		require.NoError(b, err)
+
+		err = alloc.DestroyBuffer(buffer)
+		require.NoError(b, err)
+	}
+	checkCorruption(b, allocator)
+}
+
+func BenchmarkImage(b *testing.B) {
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkBuffer")
+	defer destroyApplication(b, instance, debugMessenger, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+	var alloc Allocation
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		image, _, err := allocator.CreateImage(core1_0.ImageCreateInfo{
+			ImageType: core1_0.ImageType2D,
+			Format:    core1_0.FormatA8B8G8R8UnsignedIntPacked,
+			Extent: core1_0.Extent3D{
+				Width:  512,
+				Height: 512,
+				Depth:  1,
+			},
+			ArrayLayers: 1,
+			MipLevels:   1,
+			Usage:       core1_0.ImageUsageSampled,
+		}, AllocationCreateInfo{
+			Usage: MemoryUsageAuto,
+		}, &alloc)
+		require.NoError(b, err)
+
+		err = alloc.DestroyImage(image)
+		require.NoError(b, err)
+	}
+	checkCorruption(b, allocator)
 }

@@ -1,7 +1,6 @@
 package vam
 
 import (
-	stderr "errors"
 	"fmt"
 	"github.com/cockroachdb/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
@@ -103,15 +102,15 @@ func (b *deviceMemoryBlock) Validate() error {
 		return errors.New("this memory block's metadata has an invalid size")
 	}
 
-	var err error
-
-	b.metadata.VisitAllBlocks(func(handle metadata.BlockAllocationHandle, offset, size int, userData any, free bool) {
+	err := b.metadata.VisitAllBlocks(func(handle metadata.BlockAllocationHandle, offset, size int, userData any, free bool) error {
 		allocation, isAllocation := userData.(*Allocation)
 		if free && isAllocation {
-			err = stderr.Join(err, errors.Newf("an allocation at offset %d is marked as free but contains an allocation object", offset))
+			return errors.Newf("an allocation at offset %d is marked as free but contains an allocation object", offset)
 		} else if !free && (!isAllocation || allocation == nil) {
-			err = stderr.Join(err, errors.Newf("an allocation at offset %d is marked as allocated but has no allocation object", offset))
+			return errors.Newf("an allocation at offset %d is marked as allocated but has no allocation object", offset)
 		}
+
+		return nil
 	})
 
 	if err != nil {
