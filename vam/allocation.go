@@ -208,7 +208,7 @@ func (a *Allocation) Map() (unsafe.Pointer, common.VkResult, error) {
 	}
 
 	a.mapCount++
-	ptr, res, err := a.memory.Map(1, 0, -1, 0)
+	ptr, res, err := a.memory.Map(1, 0, common.WholeSize, 0)
 	if err != nil || ptr == nil {
 		return ptr, res, err
 	}
@@ -311,7 +311,7 @@ func (a *Allocation) printParameters(json *jwriter.ObjectState) {
 func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.MappedMemoryRange) (bool, error) {
 
 	// A size of -1 indicates the whole allocation
-	if size == 0 || size < -1 || !a.parentAllocator.deviceMemory.IsMemoryTypeHostNonCoherent(a.memoryTypeIndex) {
+	if size == 0 || size < common.WholeSize || !a.parentAllocator.deviceMemory.IsMemoryTypeHostNonCoherent(a.memoryTypeIndex) {
 		return false, nil
 	}
 
@@ -341,7 +341,7 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 		return true, nil
 	case allocationTypeBlock:
 		// Calculate Size within the allocation
-		if size == -1 {
+		if size == common.WholeSize {
 			size = allocationSize - outRange.Offset
 		}
 
@@ -396,7 +396,7 @@ func (a *Allocation) fillAllocation(pattern uint8) {
 	for i := 0; i < a.size; i++ {
 		dataSlice[i] = pattern
 	}
-	_, err = a.flushOrInvalidate(0, -1, vulkan.CacheOperationFlush)
+	_, err = a.flushOrInvalidate(0, common.WholeSize, vulkan.CacheOperationFlush)
 	if err != nil {
 		panic(fmt.Sprintf("failed when attempting to flush host cache during debug pattern fill: %+v", err))
 	}

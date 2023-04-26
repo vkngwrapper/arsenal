@@ -121,7 +121,7 @@ func (b *deviceMemoryBlock) Validate() error {
 }
 
 func (b *deviceMemoryBlock) CheckCorruption() (res common.VkResult, err error) {
-	data, res, err := b.memory.Map(1, 0, -1, 0)
+	data, res, err := b.memory.Map(1, 0, common.WholeSize, 0)
 	if err != nil {
 		return res, err
 	}
@@ -143,7 +143,7 @@ func (b *deviceMemoryBlock) WriteMagicBlockAfterAllocation(allocOffset int, allo
 		panic(fmt.Sprintf("invalid debug margin: debug margin %d must be a multiple of 4", memutils.DebugMargin))
 	}
 
-	data, res, err := b.memory.Map(1, 0, -1, 0)
+	data, res, err := b.memory.Map(1, 0, common.WholeSize, 0)
 	if err != nil {
 		return res, err
 	}
@@ -167,7 +167,7 @@ func (b *deviceMemoryBlock) ValidateMagicValueAfterAllocation(allocOffset int, a
 		panic(fmt.Sprintf("invalid debug margin: debug margin %d must be a multiple of 4", memutils.DebugMargin))
 	}
 
-	data, res, err := b.memory.Map(1, 0, -1, 0)
+	data, res, err := b.memory.Map(1, 0, common.WholeSize, 0)
 	if err != nil {
 		return res, err
 	}

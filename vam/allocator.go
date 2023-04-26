@@ -344,7 +344,7 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 
 	if doMap {
 		// Set up our persistent map
-		_, res, err = mem.Map(1, 0, -1, 0)
+		_, res, err = mem.Map(1, 0, common.WholeSize, 0)
 		if err != nil {
 			return res, err
 		}
