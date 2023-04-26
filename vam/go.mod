@@ -6,9 +6,10 @@ require (
 	github.com/cockroachdb/errors v1.9.1
 	github.com/dolthub/swiss v0.1.1-0.20230403225903-a08bdf4889f1
 	github.com/launchdarkly/go-jsonstream/v3 v3.0.0
+	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.2
 	github.com/vkngwrapper/arsenal/memutils v0.0.0-20230408184723-2a3b619df13e
-	github.com/vkngwrapper/core/v2 v2.1.3
+	github.com/vkngwrapper/core/v2 v2.2.0
 	github.com/vkngwrapper/extensions/v2 v2.1.1
 	golang.org/x/exp v0.0.0-20230321023759-10a507213a29
 )
@@ -25,7 +26,6 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	golang.org/x/sys v0.7.0 // indirect

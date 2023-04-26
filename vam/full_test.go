@@ -245,9 +245,15 @@ func BenchmarkPoolAlloc(b *testing.B) {
 		require.NoError(b, allocator.Destroy())
 	}()
 
+	index, _, err := allocator.FindMemoryTypeIndex(0xffffffff, AllocationCreateInfo{
+		RequiredFlags: core1_0.MemoryPropertyHostVisible | core1_0.MemoryPropertyHostCoherent,
+	})
+	require.NoError(b, err)
+
 	pool, _, err := allocator.CreatePool(PoolCreateInfo{
-		Flags:     PoolCreateLinearAlgorithm,
-		BlockSize: 1000000,
+		MemoryTypeIndex: index,
+		Flags:           PoolCreateLinearAlgorithm,
+		BlockSize:       1000000,
 	})
 	require.NoError(b, err)
 	defer func() {
@@ -268,6 +274,63 @@ func BenchmarkPoolAlloc(b *testing.B) {
 			Pool: pool,
 		}, &alloc)
 		require.NoError(b, err)
+
+		require.NoError(b, alloc.Free())
+	}
+	b.StopTimer()
+	res, err := pool.CheckCorruption()
+	if memutils.DebugMargin > 0 {
+		require.NoError(b, err)
+	} else {
+		require.Equal(b, core1_0.VKErrorFeatureNotPresent, res)
+	}
+	checkCorruption(b, allocator)
+}
+
+func BenchmarkAllocator_BuildStatsString(b *testing.B) {
+	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkPoolAlloc")
+	defer destroyApplication(b, instance, debugMessenger, device)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout))
+
+	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, allocator.Destroy())
+	}()
+
+	index, _, err := allocator.FindMemoryTypeIndex(0xffffffff, AllocationCreateInfo{
+		RequiredFlags: core1_0.MemoryPropertyHostVisible | core1_0.MemoryPropertyHostCoherent,
+	})
+	require.NoError(b, err)
+
+	pool, _, err := allocator.CreatePool(PoolCreateInfo{
+		MemoryTypeIndex: index,
+		Flags:           PoolCreateLinearAlgorithm,
+		BlockSize:       1000000,
+	})
+	require.NoError(b, err)
+	defer func() {
+		require.NoError(b, pool.Destroy())
+	}()
+
+	var alloc Allocation
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		memReqs := core1_0.MemoryRequirements{
+			Size:           100,
+			Alignment:      1,
+			MemoryTypeBits: 0xffffffff,
+		}
+
+		_, err = allocator.AllocateMemory(&memReqs, AllocationCreateInfo{
+			Pool: pool,
+		}, &alloc)
+		require.NoError(b, err)
+
+		str := allocator.BuildStatsString(true)
+		require.NotEmpty(b, str)
 
 		require.NoError(b, alloc.Free())
 	}

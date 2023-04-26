@@ -10,7 +10,6 @@ This seems to be implemented (see full_test.go for examples) but there are goals
 
 What's left:
 
-* Port vmaBuildStatsString
 * Figure out whether we need to implement the name vs. userdata divide used by VMA
 * VK_WHOLE_SIZE added to vkngwrapper/core and used here
 * Missing extension support added to vkngwrapper/extensions and supported here

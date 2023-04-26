@@ -2,7 +2,8 @@ package vam
 
 import (
 	"fmt"
-	"github.com/cockroachdb/errors"
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
@@ -17,6 +18,7 @@ import (
 	"golang.org/x/exp/slog"
 	"math"
 	"math/bits"
+	"strconv"
 	"unsafe"
 )
 
@@ -41,6 +43,12 @@ type Allocator struct {
 	deviceMemory         *vulkan.DeviceMemoryProperties
 	memoryBlockLists     [common.MaxMemoryTypes]*memoryBlockList
 	dedicatedAllocations [common.MaxMemoryTypes]*dedicatedAllocationList
+}
+
+type AllocatorStatistics struct {
+	MemoryTypes [common.MaxMemoryTypes]memutils.DetailedStatistics
+	MemoryHeaps [common.MaxMemoryHeaps]memutils.DetailedStatistics
+	Total       memutils.DetailedStatistics
 }
 
 func (a *Allocator) calcAllocationParams(
@@ -658,7 +666,7 @@ func (a *Allocator) multiAllocateMemory(
 	for err == nil {
 		blockList := a.memoryBlockLists[memoryTypeIndex]
 		if blockList == nil {
-			return core1_0.VKErrorUnknown, errors.Newf("attempted to allocate from unsupported memory type index %d", memoryTypeIndex)
+			return core1_0.VKErrorUnknown, errors.Errorf("attempted to allocate from unsupported memory type index %d", memoryTypeIndex)
 		}
 
 		res, err = a.allocateMemoryOfType(
@@ -920,11 +928,11 @@ func (a *Allocator) FlushAllocationSlice(allocations []Allocation, offsets []int
 	a.logger.Debug("Allocator::FlushAllocationSlice")
 
 	if len(allocations) != len(offsets) {
-		return core1_0.VKErrorUnknown, errors.Newf("allocations contains %d elements but offsets contains %d elements- they must be equal", len(allocations), len(offsets))
+		return core1_0.VKErrorUnknown, errors.Errorf("allocations contains %d elements but offsets contains %d elements- they must be equal", len(allocations), len(offsets))
 	}
 
 	if len(allocations) != len(sizes) {
-		return core1_0.VKErrorUnknown, errors.Newf("allocations contains %d elements but sizes contains %d elements- they must be equal", len(allocations), len(sizes))
+		return core1_0.VKErrorUnknown, errors.Errorf("allocations contains %d elements but sizes contains %d elements- they must be equal", len(allocations), len(sizes))
 	}
 
 	if len(allocations) == 0 {
@@ -938,11 +946,11 @@ func (a *Allocator) InvalidateAllocationSlice(allocations []Allocation, offsets 
 	a.logger.Debug("Allocator::InvalidateAllocationSlize")
 
 	if len(allocations) != len(offsets) {
-		return core1_0.VKErrorUnknown, errors.Newf("allocations contains %d elements but offsets contains %d elements- they must be equal", len(allocations), len(offsets))
+		return core1_0.VKErrorUnknown, errors.Errorf("allocations contains %d elements but offsets contains %d elements- they must be equal", len(allocations), len(offsets))
 	}
 
 	if len(allocations) != len(sizes) {
-		return core1_0.VKErrorUnknown, errors.Newf("allocations contains %d elements but sizes contains %d elements- they must be equal", len(allocations), len(sizes))
+		return core1_0.VKErrorUnknown, errors.Errorf("allocations contains %d elements but sizes contains %d elements- they must be equal", len(allocations), len(sizes))
 	}
 
 	if len(allocations) == 0 {
@@ -1054,7 +1062,7 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 		createInfo.MaxBlockCount = math.MaxInt
 	}
 	if createInfo.MinBlockCount > createInfo.MaxBlockCount {
-		return nil, core1_0.VKErrorUnknown, errors.Newf("provided MinBlockCount %d was greater than provided MaxBlockCount %d", createInfo.MinBlockCount, createInfo.MaxBlockCount)
+		return nil, core1_0.VKErrorUnknown, errors.Errorf("provided MinBlockCount %d was greater than provided MaxBlockCount %d", createInfo.MinBlockCount, createInfo.MaxBlockCount)
 	}
 
 	memTypeBits := uint32(1 << createInfo.MemoryTypeIndex)
@@ -1258,6 +1266,194 @@ func (a *Allocator) createBuffer(bufferInfo *core1_0.BufferCreateInfo, allocatio
 	}
 
 	return buffer, res, err
+}
+
+func (a *Allocator) CalculateStatistics(stats *AllocatorStatistics) error {
+	if stats == nil {
+		return errors.New("attemped to calculate statistics and store to nil statistics object")
+	}
+
+	stats.Total.Clear()
+	for i := 0; i < common.MaxMemoryTypes; i++ {
+		stats.MemoryTypes[i].Clear()
+		if i < len(a.memoryBlockLists) && a.memoryBlockLists[i] != nil {
+			a.memoryBlockLists[i].AddDetailedStatistics(&stats.MemoryTypes[i])
+		}
+	}
+	for i := 0; i < common.MaxMemoryHeaps; i++ {
+		stats.MemoryHeaps[i].Clear()
+	}
+
+	a.calculatePoolStatistics(stats)
+
+	for i := 0; i < len(a.dedicatedAllocations); i++ {
+		if a.dedicatedAllocations[i] != nil {
+			a.dedicatedAllocations[i].AddDetailedStatistics(&stats.MemoryTypes[i])
+		}
+	}
+
+	for i := 0; i < a.deviceMemory.MemoryTypeCount(); i++ {
+		memHeapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(i)
+		stats.MemoryHeaps[memHeapIndex].AddDetailedStatistics(&stats.MemoryTypes[i])
+		stats.Total.AddDetailedStatistics(&stats.MemoryTypes[i])
+	}
+
+	if stats.Total.AllocationCount > 0 && stats.Total.AllocationSizeMin > stats.Total.AllocationSizeMax {
+		panic(fmt.Sprintf("somehow the minimum allocation size %d is greater than the maximum allocation size %d", stats.Total.AllocationSizeMin, stats.Total.AllocationSizeMax))
+	}
+
+	if stats.Total.UnusedRangeCount > 0 && stats.Total.UnusedRangeSizeMin > stats.Total.UnusedRangeSizeMax {
+		panic(fmt.Sprintf("somehow the minimum unused range size %d is greater than the maximum unused range size %d", stats.Total.UnusedRangeSizeMin, stats.Total.UnusedRangeSizeMax))
+	}
+
+	return nil
+}
+
+func (a *Allocator) calculatePoolStatistics(stats *AllocatorStatistics) {
+	a.poolsMutex.RLock()
+	defer a.poolsMutex.RUnlock()
+
+	pool := a.pools
+	for pool != nil {
+		pool.blockList.AddDetailedStatistics(&stats.MemoryTypes[pool.blockList.memoryTypeIndex])
+		pool.dedicatedAllocations.AddDetailedStatistics(&stats.MemoryTypes[pool.blockList.memoryTypeIndex])
+		pool = pool.next
+	}
+}
+
+func (a *Allocator) BuildStatsString(detailed bool) string {
+	writer := jwriter.NewWriter()
+	objState := writer.Object()
+	a.buildGeneralObj(&objState)
+
+	var stats AllocatorStatistics
+	err := a.CalculateStatistics(&stats)
+	if err != nil {
+		panic(fmt.Sprintf("CalculateStatistics failed: %+v", err))
+	}
+	stats.Total.PrintJson(objState.Name("Total"))
+
+	memoryInfoObj := objState.Name("MemoryInfo").Object()
+	for i := 0; i < a.deviceMemory.MemoryHeapCount(); i++ {
+		key := fmt.Sprintf("Heap %d", i)
+		a.buildHeapInfo(memoryInfoObj.Name(key), i, &stats)
+	}
+	memoryInfoObj.End()
+
+	if detailed {
+		a.buildDefaultPools(objState.Name("DefaultPools"))
+		a.buildCustomPools(objState.Name("CustomPools"))
+	}
+	objState.End()
+	return string(writer.Bytes())
+}
+
+func (a *Allocator) buildDefaultPools(writer *jwriter.Writer) {
+	objState := writer.Object()
+	defer objState.End()
+
+	for i := 0; i < a.deviceMemory.MemoryTypeCount(); i++ {
+		blockList := a.memoryBlockLists[i]
+		if blockList != nil {
+			key := fmt.Sprintf("Type %d", i)
+			blockObj := objState.Name(key).Object()
+			blockObj.Name("PreferredBlockSize").Int(blockList.PreferredBlockSize())
+			blockList.PrintDetailedMap(blockObj.Name("Blocks"))
+			a.dedicatedAllocations[i].BuildStatsString(blockObj.Name("DedicatedAllocations"))
+			blockObj.End()
+		}
+	}
+}
+
+func (a *Allocator) buildCustomPools(writer *jwriter.Writer) {
+	a.poolsMutex.RLock()
+	defer a.poolsMutex.RUnlock()
+
+	objState := writer.Object()
+	defer objState.End()
+
+	if a.pools == nil {
+		return
+	}
+
+	for i := 0; i < a.deviceMemory.MemoryTypeCount(); i++ {
+		var arrayState *jwriter.ArrayState
+		poolIndex := 0
+
+		for pool := a.pools; pool != nil; pool = pool.next {
+			blockList := &pool.blockList
+			if blockList.MemoryTypeIndex() == i {
+				if arrayState == nil {
+					key := fmt.Sprintf("Type %d", i)
+					arrayStateObj := objState.Name(key).Array()
+					arrayState = &arrayStateObj
+				}
+
+				poolObjState := arrayState.Object()
+				name := strconv.Itoa(poolIndex)
+				if pool.Name() != "" {
+					name = fmt.Sprintf("%s - %s", name, pool.Name())
+				}
+
+				poolObjState.Name("Name").String(name)
+				poolObjState.Name("PreferredBlockSize").Int(blockList.PreferredBlockSize())
+				blockList.PrintDetailedMap(poolObjState.Name("Blocks"))
+
+				pool.dedicatedAllocations.BuildStatsString(poolObjState.Name("DedicatedAllocations"))
+				poolObjState.End()
+			}
+		}
+
+		if arrayState != nil {
+			arrayState.End()
+		}
+	}
+}
+
+func (a *Allocator) buildHeapInfo(writer *jwriter.Writer, heapIndex int, stats *AllocatorStatistics) {
+	heapInfo := writer.Object()
+	defer heapInfo.End()
+
+	heapProps := a.deviceMemory.MemoryHeapProperties(heapIndex)
+	heapInfo.Name("Flags").String(heapProps.Flags.String())
+	heapInfo.Name("Size").Int(heapProps.Size)
+
+	var budget vulkan.Budget
+	a.deviceMemory.HeapBudget(heapIndex, &budget)
+	budget.PrintJson(heapInfo.Name("Budget"))
+	stats.MemoryHeaps[heapIndex].PrintJson(heapInfo.Name("Stats"))
+
+	memoryPools := heapInfo.Name("MemoryPools").Object()
+	defer memoryPools.End()
+
+	for i := 0; i < a.deviceMemory.MemoryTypeCount(); i++ {
+		if a.deviceMemory.MemoryTypeIndexToHeapIndex(i) == heapIndex {
+			key := fmt.Sprintf("Type %d", i)
+			memoryPoolObj := memoryPools.Name(key).Object()
+
+			typeProps := a.deviceMemory.MemoryTypeProperties(i)
+			memoryPoolObj.Name("Flags").String(typeProps.PropertyFlags.String())
+			stats.MemoryTypes[i].PrintJson(memoryPoolObj.Name("Stats"))
+
+			memoryPoolObj.End()
+		}
+	}
+}
+
+func (a *Allocator) buildGeneralObj(objState *jwriter.ObjectState) {
+	generalObj := objState.Name("General").Object()
+	defer generalObj.End()
+
+	deviceProps := a.deviceMemory.DeviceProperties()
+	generalObj.Name("API").String("Vulkan")
+	generalObj.Name("apiVersion").String(deviceProps.APIVersion.String())
+	generalObj.Name("GPU").String(deviceProps.DriverName)
+	generalObj.Name("deviceType").String(deviceProps.DriverType.String())
+	generalObj.Name("maxMemoryAllocationCount").Int(deviceProps.Limits.MaxMemoryAllocationCount)
+	generalObj.Name("bufferImageGranularity").Int(deviceProps.Limits.BufferImageGranularity)
+	generalObj.Name("nonCoherentAtomSize").Int(deviceProps.Limits.NonCoherentAtomSize)
+	generalObj.Name("memoryHeapCount").Int(a.deviceMemory.MemoryHeapCount())
+	generalObj.Name("memoryTypeCount").Int(a.deviceMemory.MemoryTypeCount())
 }
 
 func (a *Allocator) CreateImage(imageInfo core1_0.ImageCreateInfo, allocInfo AllocationCreateInfo, outAlloc *Allocation) (image core1_0.Image, res common.VkResult, err error) {

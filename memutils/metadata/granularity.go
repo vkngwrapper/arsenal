@@ -1,7 +1,7 @@
 package metadata
 
 import (
-	"github.com/cockroachdb/errors"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"math/bits"
 )
@@ -168,14 +168,14 @@ func (g *BlockBufferImageGranularity) validate(ctx *validationContext, offset, s
 	start := g.getStartPage(offset)
 	ctx.pageAllocs[start]++
 	if g.regionInfo[start].allocCount < 1 {
-		return errors.Newf("no allocations in start page %d", start)
+		return errors.Errorf("no allocations in start page %d", start)
 	}
 
 	end := g.getEndPage(offset, size)
 	if start != end {
 		ctx.pageAllocs[end]++
 		if g.regionInfo[end].allocCount < 1 {
-			return errors.Newf("no allocations in end page %d", end)
+			return errors.Errorf("no allocations in end page %d", end)
 		}
 	}
 
@@ -189,7 +189,7 @@ func (g *BlockBufferImageGranularity) finishValidation(ctx *validationContext) e
 
 	for regionIndex, region := range g.regionInfo {
 		if ctx.pageAllocs[regionIndex] != region.allocCount {
-			return errors.Newf("allocation count mismatch on page %d", regionIndex)
+			return errors.Errorf("allocation count mismatch on page %d", regionIndex)
 		}
 	}
 	ctx.pageAllocs = nil

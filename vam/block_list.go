@@ -2,8 +2,8 @@ package vam
 
 import (
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
@@ -653,27 +653,25 @@ func (l *memoryBlockList) commitAllocationRequest(allocRequest metadata.Allocati
 	return core1_0.VKSuccess, nil
 }
 
-func (l *memoryBlockList) PrintDetailedMap(json jwriter.ObjectState) error {
+func (l *memoryBlockList) PrintDetailedMap(writer *jwriter.Writer) {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
+
+	objState := writer.Object()
+	defer objState.End()
 
 	for i := 0; i < len(l.blocks); i++ {
 		block := l.blocks[i]
 
-		blockObj := json.Name(strconv.Itoa(block.id)).Object()
+		blockObj := objState.Name(strconv.Itoa(block.id)).Object()
 
 		blockObj.Name("MapReferences").Int(block.memory.References())
-		err := block.metadata.PrintDetailedMapHeader(blockObj)
-		if err != nil {
-			return err
-		}
+		block.metadata.PrintDetailedMapHeader(blockObj)
 
 		l.printDetailedMapAllocations(block.metadata, blockObj)
 
 		blockObj.End()
 	}
-
-	return nil
 }
 
 func (l *memoryBlockList) printDetailedMapAllocations(md metadata.BlockMetadata, json jwriter.ObjectState) {
@@ -725,7 +723,7 @@ func (l *memoryBlockList) CheckCorruption() (common.VkResult, error) {
 	for blockIndex := 0; blockIndex < len(l.blocks); blockIndex++ {
 		block := l.blocks[blockIndex]
 		if block == nil {
-			return core1_0.VKErrorUnknown, errors.Newf("unexpected nil block at memory type %d, block %d", l.memoryTypeIndex, blockIndex)
+			return core1_0.VKErrorUnknown, errors.Errorf("unexpected nil block at memory type %d, block %d", l.memoryTypeIndex, blockIndex)
 		}
 
 		res, err := block.CheckCorruption()

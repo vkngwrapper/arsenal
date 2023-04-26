@@ -35,7 +35,7 @@ type BlockMetadata interface {
 
 	Clear()
 	DebugLogAllAllocations(log *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any))
-	PrintDetailedMapHeader(json jwriter.ObjectState) error
+	PrintDetailedMapHeader(json jwriter.ObjectState)
 
 	CheckCorruption(blockData unsafe.Pointer) (common.VkResult, error)
 	CreateAllocationRequest(

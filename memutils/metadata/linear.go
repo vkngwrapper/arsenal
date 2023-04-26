@@ -2,8 +2,8 @@ package metadata
 
 import (
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -90,7 +90,7 @@ func (m *LinearBlockMetadata) Validate() error {
 
 	if len(firstVector) != 0 {
 		if firstVector[m.firstNullItemsBeginCount].Type == SuballocationFree {
-			return errors.Newf("there should only be %d free items at the beginning of the primary metadata, but there seem to be more", m.firstNullItemsBeginCount)
+			return errors.Errorf("there should only be %d free items at the beginning of the primary metadata, but there seem to be more", m.firstNullItemsBeginCount)
 		}
 
 		if firstVector[len(firstVector)-1].Type == SuballocationFree {
@@ -105,11 +105,11 @@ func (m *LinearBlockMetadata) Validate() error {
 	}
 
 	if m.firstNullItemsBeginCount+m.firstNullItemsMiddleCount > len(firstVector) {
-		return errors.Newf("metadata indicates that there are %d free items in the primary metadata, but there are only %d total items", m.firstNullItemsMiddleCount+m.firstNullItemsBeginCount, len(firstVector))
+		return errors.Errorf("metadata indicates that there are %d free items in the primary metadata, but there are only %d total items", m.firstNullItemsMiddleCount+m.firstNullItemsBeginCount, len(firstVector))
 	}
 
 	if m.secondNullItemsCount > len(secondVector) {
-		return errors.Newf("metadata indicates that there are %d free items in the secondary metadata, but there are only %d total items", m.secondNullItemsCount, len(secondVector))
+		return errors.Errorf("metadata indicates that there are %d free items in the secondary metadata, but there are only %d total items", m.secondNullItemsCount, len(secondVector))
 	}
 
 	var sumUsedSize, offset int
@@ -125,7 +125,7 @@ func (m *LinearBlockMetadata) Validate() error {
 			isFree := suballoc.Type == SuballocationFree
 
 			if suballoc.Offset < offset {
-				return errors.Newf("suballoc at index %d in the secondary ring buffer has offset %d- this collides with previous suballocations, expected offset %d", suballocIndex, suballoc.Offset, offset)
+				return errors.Errorf("suballoc at index %d in the secondary ring buffer has offset %d- this collides with previous suballocations, expected offset %d", suballocIndex, suballoc.Offset, offset)
 			}
 
 			if !isFree {
@@ -138,7 +138,7 @@ func (m *LinearBlockMetadata) Validate() error {
 		}
 
 		if nullItemSecondCount != m.secondNullItemsCount {
-			return errors.Newf("counted %d null items in the secondary ring buffer, but metadata indicates we should have %d", nullItemSecondCount, m.secondNullItemsCount)
+			return errors.Errorf("counted %d null items in the secondary ring buffer, but metadata indicates we should have %d", nullItemSecondCount, m.secondNullItemsCount)
 		}
 	}
 
@@ -148,7 +148,7 @@ func (m *LinearBlockMetadata) Validate() error {
 		isFree := suballoc.Type == SuballocationFree
 
 		if suballoc.Offset < offset {
-			return errors.Newf("suballoc at index %d in the primary vector has offset %d- this collides with previous suballocations, expected offset %d", suballocIndex, suballoc.Offset, offset)
+			return errors.Errorf("suballoc at index %d in the primary vector has offset %d- this collides with previous suballocations, expected offset %d", suballocIndex, suballoc.Offset, offset)
 		}
 
 		if !isFree {
@@ -161,7 +161,7 @@ func (m *LinearBlockMetadata) Validate() error {
 	}
 
 	if nullItemsFirstCount != m.firstNullItemsBeginCount+m.firstNullItemsMiddleCount {
-		return errors.Newf("counted %d null items in the primary vector, but metadata indicates we should have %d", nullItemsFirstCount, m.firstNullItemsMiddleCount+m.firstNullItemsBeginCount)
+		return errors.Errorf("counted %d null items in the primary vector, but metadata indicates we should have %d", nullItemsFirstCount, m.firstNullItemsMiddleCount+m.firstNullItemsBeginCount)
 	}
 
 	if m.secondVectorMode == SecondVectorModeDoubleStack {
@@ -170,7 +170,7 @@ func (m *LinearBlockMetadata) Validate() error {
 			isFree := suballoc.Type == SuballocationFree
 
 			if suballoc.Offset < offset {
-				return errors.Newf("suballoc at index %d in the secondary ring buffer has offset %d- this collides with previous suballocations, expected offset %d", suballocIndex, suballoc.Offset, offset)
+				return errors.Errorf("suballoc at index %d in the secondary ring buffer has offset %d- this collides with previous suballocations, expected offset %d", suballocIndex, suballoc.Offset, offset)
 			}
 
 			if !isFree {
@@ -183,16 +183,16 @@ func (m *LinearBlockMetadata) Validate() error {
 		}
 
 		if nullItemSecondCount != m.secondNullItemsCount {
-			return errors.Newf("counted %d null items in the secondary ring buffer, but metadata indicates we should have %d", nullItemSecondCount, m.secondNullItemsCount)
+			return errors.Errorf("counted %d null items in the secondary ring buffer, but metadata indicates we should have %d", nullItemSecondCount, m.secondNullItemsCount)
 		}
 	}
 
 	if offset > m.Size() {
-		return errors.Newf("calculated a combined maximum memory offset of %d, but the metadata indicates a total size of %d, which is smaller", offset, m.Size())
+		return errors.Errorf("calculated a combined maximum memory offset of %d, but the metadata indicates a total size of %d, which is smaller", offset, m.Size())
 	}
 
 	if m.sumFreeSize != m.Size()-sumUsedSize {
-		return errors.Newf("the metadata's free size %d and the calculated total block size %d don't add up to the metadata-reported size of %d", m.sumFreeSize, sumUsedSize, m.Size())
+		return errors.Errorf("the metadata's free size %d and the calculated total block size %d don't add up to the metadata-reported size of %d", m.sumFreeSize, sumUsedSize, m.Size())
 	}
 
 	return nil
@@ -388,7 +388,7 @@ func (m *LinearBlockMetadata) AddStatistics(stats *memutils.Statistics) {
 		})
 }
 
-func (m *LinearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) error {
+func (m *LinearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) {
 	// first pass
 	size := m.Size()
 	var unusedRangeCount, usedBytes, allocCount int
@@ -407,8 +407,6 @@ func (m *LinearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) e
 
 	unusedBytes := size - usedBytes
 	m.PrintDetailedMap_Header(json, unusedBytes, allocCount, unusedRangeCount)
-
-	return nil
 }
 
 func (m *LinearBlockMetadata) CreateAllocationRequest(
@@ -527,7 +525,7 @@ func (m *LinearBlockMetadata) Alloc(req AllocationRequest, allocType Suballocati
 		*secondVector = append(*secondVector, newSuballoc)
 		break
 	default:
-		return errors.Newf("attempted to allocate a request of type %s, but that type isn't supported by the Linear metadata", req.Type)
+		return errors.Errorf("attempted to allocate a request of type %s, but that type isn't supported by the Linear metadata", req.Type)
 	}
 
 	m.sumFreeSize -= newSuballoc.Size

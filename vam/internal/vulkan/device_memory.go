@@ -3,6 +3,7 @@ package vulkan
 import (
 	"fmt"
 	"github.com/cockroachdb/errors"
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -15,6 +16,14 @@ type Budget struct {
 	Statistics memutils.Statistics
 	Usage      int
 	Budget     int
+}
+
+func (b Budget) PrintJson(writer *jwriter.Writer) {
+	objState := writer.Object()
+	defer objState.End()
+
+	objState.Name("BudgetBytes").Int(b.Budget)
+	objState.Name("UsageBytes").Int(b.Usage)
 }
 
 type MemoryCallbacks interface {

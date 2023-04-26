@@ -2,9 +2,9 @@ package metadata
 
 import (
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"github.com/dolthub/swiss"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -159,20 +159,20 @@ func (m *TLSFBlockMetadata) Validate() error {
 		}
 
 		if !block.IsFree() {
-			return errors.Newf("block at offset %d is in the free list but is not free", block.offset)
+			return errors.Errorf("block at offset %d is in the free list but is not free", block.offset)
 		}
 
 		if block.prevFree != nil {
-			return errors.Newf("block at offset %d is the head of a free list but has a previous block", block.offset)
+			return errors.Errorf("block at offset %d is the head of a free list but has a previous block", block.offset)
 		}
 
 		freeListCount++
 		for block.nextFree != nil {
 			if !block.nextFree.IsFree() {
-				return errors.Newf("block at offset %d is in the free list but it is not free", block.nextFree.offset)
+				return errors.Errorf("block at offset %d is in the free list but it is not free", block.nextFree.offset)
 			}
 			if block.nextFree.prevFree != block {
-				return errors.Newf("block at offset %d lists the block at offset %d as its next block, but the reverse reference is broken", block.offset, block.nextFree.offset)
+				return errors.Errorf("block at offset %d lists the block at offset %d as its next block, but the reverse reference is broken", block.offset, block.nextFree.offset)
 			}
 
 			freeListCount++
@@ -193,7 +193,7 @@ func (m *TLSFBlockMetadata) Validate() error {
 
 	for prev := m.nullBlock.prevPhysical; prev != nil; prev = prev.prevPhysical {
 		if prev.offset+prev.size != nextOffset {
-			return errors.Newf("physical block at offset %d does not end at the next block's start offset", prev.offset)
+			return errors.Errorf("physical block at offset %d does not end at the next block's start offset", prev.offset)
 		}
 
 		nextOffset = prev.offset
@@ -215,12 +215,12 @@ func (m *TLSFBlockMetadata) Validate() error {
 		}
 
 		if prev.prevPhysical != nil && prev.prevPhysical.nextPhysical != prev {
-			return errors.Newf("block at offset %d has a previous physical block, but the reverse reference is broken", prev.offset)
+			return errors.Errorf("block at offset %d has a previous physical block, but the reverse reference is broken", prev.offset)
 		}
 	}
 
 	if freeListCount != freeCount {
-		return errors.Newf("the number of free blocks in the physical list and the number of blocks in the free list do not match! free list size: %d, physical list free blocks: %d", freeListCount, freeCount)
+		return errors.Errorf("the number of free blocks in the physical list and the number of blocks in the free list do not match! free list size: %d, physical list free blocks: %d", freeListCount, freeCount)
 	}
 
 	if !m.isVirtual {
@@ -231,23 +231,23 @@ func (m *TLSFBlockMetadata) Validate() error {
 	}
 
 	if nextOffset != 0 {
-		return errors.Newf("the first physical block should have an offset of 0, but instead it has an offset of %d", nextOffset)
+		return errors.Errorf("the first physical block should have an offset of 0, but instead it has an offset of %d", nextOffset)
 	}
 
 	if calculatedSize != m.size {
-		return errors.Newf("the full size of the metadata is %d, but the blocks only added up to %d", m.size, calculatedSize)
+		return errors.Errorf("the full size of the metadata is %d, but the blocks only added up to %d", m.size, calculatedSize)
 	}
 
 	if calculatedFreeSize != m.SumFreeSize() {
-		return errors.Newf("the free size of the metadata is %d, but the free blocks only added up to %d", m.SumFreeSize(), calculatedFreeSize)
+		return errors.Errorf("the free size of the metadata is %d, but the free blocks only added up to %d", m.SumFreeSize(), calculatedFreeSize)
 	}
 
 	if allocCount != m.allocCount {
-		return errors.Newf("the allocation count of the metadata is %d, but the taken blocks only added up to %d", m.allocCount, allocCount)
+		return errors.Errorf("the allocation count of the metadata is %d, but the taken blocks only added up to %d", m.allocCount, allocCount)
 	}
 
 	if freeCount != m.blocksFreeCount {
-		return errors.Newf("the free block count of the metadata is %d, but there were only %d free blocks", m.blocksFreeCount, freeCount)
+		return errors.Errorf("the free block count of the metadata is %d, but there were only %d free blocks", m.blocksFreeCount, freeCount)
 	}
 
 	return nil
@@ -343,7 +343,7 @@ func (m *TLSFBlockMetadata) CreateAllocationRequest(
 	var allocRequest AllocationRequest
 
 	if allocSize < 1 {
-		return false, allocRequest, errors.Newf("Invalid allocSize: %d", allocSize)
+		return false, allocRequest, errors.Errorf("Invalid allocSize: %d", allocSize)
 	}
 
 	if upperAddress {
@@ -625,7 +625,7 @@ func (m *TLSFBlockMetadata) findFreeBlock(size int, listIndex int) (*tlsfBlock, 
 	return m.freeList[listIndex], listIndex
 }
 
-func (m *TLSFBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) error {
+func (m *TLSFBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) {
 	blockCount := m.allocCount + m.blocksFreeCount
 	blockList := make([]*tlsfBlock, blockCount)
 
@@ -636,7 +636,7 @@ func (m *TLSFBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) err
 	}
 
 	if i != 0 {
-		return errors.New("the block metadata's block count does not match the number of physical blocks")
+		panic("the block metadata's block count does not match the number of physical blocks")
 	}
 
 	var stats memutils.DetailedStatistics
@@ -644,8 +644,6 @@ func (m *TLSFBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) err
 	m.AddDetailedStatistics(&stats)
 
 	m.PrintDetailedMap_Header(json, stats.BlockBytes-stats.AllocationBytes, stats.AllocationCount, stats.UnusedRangeCount)
-
-	return nil
 }
 
 func (m *TLSFBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.VkResult, error) {

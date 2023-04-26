@@ -1,6 +1,9 @@
 package memutils
 
-import "math"
+import (
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"math"
+)
 
 type Statistics struct {
 	BlockCount      int
@@ -21,6 +24,20 @@ func (s *Statistics) AddStatistics(other *Statistics) {
 	s.AllocationCount += other.AllocationCount
 	s.BlockBytes += other.BlockBytes
 	s.AllocationBytes += other.AllocationBytes
+}
+
+func (s *Statistics) PrintJson(writer *jwriter.Writer) {
+	objState := writer.Object()
+	defer objState.End()
+
+	s.printJsonObj(&objState)
+}
+
+func (s *Statistics) printJsonObj(objState *jwriter.ObjectState) {
+	objState.Name("BlockCount").Int(s.BlockCount)
+	objState.Name("BlockBytes").Int(s.BlockBytes)
+	objState.Name("AllocationCount").Int(s.AllocationCount)
+	objState.Name("AllocationBytes").Int(s.AllocationBytes)
 }
 
 type DetailedStatistics struct {
@@ -84,5 +101,22 @@ func (s *DetailedStatistics) AddDetailedStatistics(other *DetailedStatistics) {
 
 	if other.AllocationSizeMax > s.AllocationSizeMax {
 		s.AllocationSizeMax = other.AllocationSizeMax
+	}
+}
+
+func (s *DetailedStatistics) PrintJson(writer *jwriter.Writer) {
+	objState := writer.Object()
+	defer objState.End()
+
+	s.Statistics.printJsonObj(&objState)
+	objState.Name("UnusedRangeCount").Int(s.UnusedRangeCount)
+
+	if s.AllocationCount > 1 {
+		objState.Name("AllocationSizeMin").Int(s.AllocationSizeMin)
+		objState.Name("AllocationSizeMax").Int(s.AllocationSizeMax)
+	}
+	if s.UnusedRangeCount > 1 {
+		objState.Name("UnusedRangeSizeMin").Int(s.UnusedRangeSizeMin)
+		objState.Name("UnusedRangeSizeMax").Int(s.UnusedRangeSizeMax)
 	}
 }

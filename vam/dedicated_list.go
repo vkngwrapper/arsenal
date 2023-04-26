@@ -1,8 +1,8 @@
 package vam
 
 import (
-	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 )
@@ -31,7 +31,7 @@ func (l *dedicatedAllocationList) Validate() error {
 	}
 
 	if declaredCount != actualCount {
-		return errors.Newf("the listed number of dedicated allocations in the list (%d) does not match the actual number of allocations (%d)", declaredCount, actualCount)
+		return errors.Errorf("the listed number of dedicated allocations in the list (%d) does not match the actual number of allocations (%d)", declaredCount, actualCount)
 	}
 
 	return nil
@@ -61,9 +61,12 @@ func (l *dedicatedAllocationList) AddStatistics(stats *memutils.Statistics) {
 	}
 }
 
-func (l *dedicatedAllocationList) BuildStatsString(s *jwriter.ArrayState) {
+func (l *dedicatedAllocationList) BuildStatsString(writer *jwriter.Writer) {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()
+
+	s := writer.Array()
+	defer s.End()
 
 	for alloc := l.allocationListHead; alloc != nil; alloc = alloc.nextDedicatedAlloc() {
 
