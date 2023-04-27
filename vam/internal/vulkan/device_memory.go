@@ -2,8 +2,8 @@ package vulkan
 
 import (
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
@@ -344,7 +344,7 @@ func (m *DeviceMemoryProperties) FlushOrInvalidateAllocations(memRanges []core1_
 		return m.device.InvalidateMappedMemoryRanges(memRanges)
 	}
 
-	return core1_0.VKErrorUnknown, errors.Newf("attempted to carry out invalid cache operation %s", operation.String())
+	return core1_0.VKErrorUnknown, errors.Errorf("attempted to carry out invalid cache operation %s", operation.String())
 }
 
 const (

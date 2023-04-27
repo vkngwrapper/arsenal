@@ -1,7 +1,7 @@
 package vam
 
 import (
-	"github.com/cockroachdb/errors"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
@@ -201,17 +201,17 @@ func (a *Allocator) Destroy() error {
 		if a.dedicatedAllocations[memoryTypeIndex] != nil {
 			memutils.DebugValidate(a.dedicatedAllocations[memoryTypeIndex])
 			if !a.dedicatedAllocations[memoryTypeIndex].IsEmpty() {
-				return errors.Newf("the allocator still has %d unfreed dedicated allocations for memory type %d", a.dedicatedAllocations[memoryTypeIndex].count, memoryTypeIndex)
+				return errors.Errorf("the allocator still has %d unfreed dedicated allocations for memory type %d", a.dedicatedAllocations[memoryTypeIndex].count, memoryTypeIndex)
 			}
 		}
 
 		if a.memoryBlockLists[memoryTypeIndex] != nil && !a.memoryBlockLists[memoryTypeIndex].HasNoAllocations() {
-			return errors.Newf("the allocator still has unfreed block allocations for memory type %d", memoryTypeIndex)
+			return errors.Errorf("the allocator still has unfreed block allocations for memory type %d", memoryTypeIndex)
 		}
 	}
 
 	if a.pools != nil {
-		return errors.Newf("the allocator still has active pools that must be destroyed")
+		return errors.Errorf("the allocator still has active pools that must be destroyed")
 	}
 
 	for memoryTypeIndex := 0; memoryTypeIndex < a.deviceMemory.MemoryTypeCount(); memoryTypeIndex++ {

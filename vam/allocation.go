@@ -2,8 +2,8 @@ package vam
 
 import (
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
@@ -262,7 +262,7 @@ func (a *Allocation) bindBufferMemory(offset int, buffer core1_0.Buffer, next co
 		return a.memory.BindVulkanBuffer(offset+allocOffset, buffer, next)
 	}
 
-	return core1_0.VKErrorUnknown, errors.Newf("attempted to bind an allocation with an unknown type: %s", a.allocationType.String())
+	return core1_0.VKErrorUnknown, errors.Errorf("attempted to bind an allocation with an unknown type: %s", a.allocationType.String())
 }
 
 func (a *Allocation) BindImageMemory(image core1_0.Image) (common.VkResult, error) {
@@ -290,7 +290,7 @@ func (a *Allocation) bindImageMemory(offset int, image core1_0.Image, next commo
 		return a.memory.BindVulkanImage(offset+allocOffset, image, next)
 	}
 
-	return core1_0.VKErrorUnknown, errors.Newf("attempted to bind an allocation with an unknown type: %s", a.allocationType.String())
+	return core1_0.VKErrorUnknown, errors.Errorf("attempted to bind an allocation with an unknown type: %s", a.allocationType.String())
 }
 
 func (a *Allocation) printParameters(json *jwriter.ObjectState) {
@@ -319,10 +319,10 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 	allocationSize := a.Size()
 
 	if offset > allocationSize {
-		return false, errors.Newf("offset %d is past the end of the allocation, which is size %d", offset, allocationSize)
+		return false, errors.Errorf("offset %d is past the end of the allocation, which is size %d", offset, allocationSize)
 	}
 	if size > 0 && (offset+size) > allocationSize {
-		return false, errors.Newf("offset %d places the end of the block %d past the end of the allocation, which is size %d", offset, offset+size, allocationSize)
+		return false, errors.Errorf("offset %d places the end of the block %d past the end of the allocation, which is size %d", offset, offset+size, allocationSize)
 	}
 
 	outRange.Next = nil
@@ -364,7 +364,7 @@ func (a *Allocation) flushOrInvalidateRange(offset, size int, outRange *core1_0.
 		return true, nil
 	}
 
-	return false, errors.Newf("attempted to get the flush or invalidate range of an allocation with invalid type %s", a.allocationType.String())
+	return false, errors.Errorf("attempted to get the flush or invalidate range of an allocation with invalid type %s", a.allocationType.String())
 }
 
 func (a *Allocation) flushOrInvalidate(offset, size int, operation vulkan.CacheOperation) (common.VkResult, error) {
@@ -531,7 +531,7 @@ func (a *Allocation) createAliasingBuffer(offset int, bufferInfo *core1_0.Buffer
 	if bufferInfo.Size == 0 {
 		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create a buffer of 0 size")
 	} else if offset+bufferInfo.Size <= a.Size() {
-		return nil, core1_0.VKErrorUnknown, errors.Newf("attempted to create a buffer that was too big to fit in its allocation: offset %d, size %d, buffer would have ended at %d but allocation is only %d bytes", offset, bufferInfo.Size, offset+bufferInfo.Size, a.Size())
+		return nil, core1_0.VKErrorUnknown, errors.Errorf("attempted to create a buffer that was too big to fit in its allocation: offset %d, size %d, buffer would have ended at %d but allocation is only %d bytes", offset, bufferInfo.Size, offset+bufferInfo.Size, a.Size())
 	} else if bufferInfo.Usage&khr_buffer_device_address.BufferUsageShaderDeviceAddress != 0 && a.parentAllocator.extensionData.BufferDeviceAddress == nil {
 		return nil, core1_0.VKErrorExtensionNotPresent, errors.New("attempted to use BufferUsageShaderDeviceAddress, but khr_buffer_device_address is not loaded")
 	}

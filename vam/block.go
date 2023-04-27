@@ -2,7 +2,7 @@ package vam
 
 import (
 	"fmt"
-	"github.com/cockroachdb/errors"
+	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
@@ -105,9 +105,9 @@ func (b *deviceMemoryBlock) Validate() error {
 	err := b.metadata.VisitAllBlocks(func(handle metadata.BlockAllocationHandle, offset, size int, userData any, free bool) error {
 		allocation, isAllocation := userData.(*Allocation)
 		if free && isAllocation {
-			return errors.Newf("an allocation at offset %d is marked as free but contains an allocation object", offset)
+			return errors.Errorf("an allocation at offset %d is marked as free but contains an allocation object", offset)
 		} else if !free && (!isAllocation || allocation == nil) {
-			return errors.Newf("an allocation at offset %d is marked as allocated but has no allocation object", offset)
+			return errors.Errorf("an allocation at offset %d is marked as allocated but has no allocation object", offset)
 		}
 
 		return nil
