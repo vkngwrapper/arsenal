@@ -1,7 +1,7 @@
 package memutils
 
 import (
-	cerrors "github.com/cockroachdb/errors"
+	cerrors "github.com/pkg/errors"
 )
 
 type Number interface {
