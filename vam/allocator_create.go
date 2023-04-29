@@ -97,7 +97,7 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 		instance:            instance,
 		physicalDevice:      physicalDevice,
 		device:              device,
-		extensionData:       vulkan.NewExtensionData(device),
+		extensionData:       vulkan.NewExtensionData(device, physicalDevice, instance),
 		allocationCallbacks: options.VulkanCallbacks,
 
 		createFlags:                      options.Flags,
@@ -134,6 +134,7 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 		physicalDevice,
 		options.HeapSizeLimits,
 		externalMemoryTypes,
+		allocator.extensionData,
 	)
 	if err != nil {
 		return nil, err
@@ -171,8 +172,6 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 			allocator.dedicatedAllocations[typeIndex].Init(useMutex)
 		}
 	}
-
-	// TODO Memory budget setup
 
 	return allocator, nil
 }

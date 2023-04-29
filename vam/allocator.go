@@ -12,9 +12,12 @@ import (
 	"github.com/vkngwrapper/core/v2/core1_0"
 	"github.com/vkngwrapper/core/v2/core1_1"
 	"github.com/vkngwrapper/core/v2/driver"
+	"github.com/vkngwrapper/extensions/v2/amd_device_coherent_memory"
+	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
 	"github.com/vkngwrapper/extensions/v2/khr_buffer_device_address"
 	"github.com/vkngwrapper/extensions/v2/khr_dedicated_allocation"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
+	"github.com/vkngwrapper/extensions/v2/khr_maintenance4"
 	"golang.org/x/exp/slog"
 	"math"
 	"math/bits"
@@ -172,7 +175,11 @@ func (a *Allocator) findMemoryPreferences(
 		}
 	}
 
-	// TODO: VK_AMD_device_coherent_memory
+	if (o.RequiredFlags|o.PreferredFlags)&(amd_device_coherent_memory.MemoryPropertyDeviceCoherentAMD|
+		amd_device_coherent_memory.MemoryPropertyDeviceUncachedAMD) == 0 {
+
+		notPreferredFlags |= amd_device_coherent_memory.MemoryPropertyDeviceUncachedAMD
+	}
 	return requiredFlags, preferredFlags, notPreferredFlags, nil
 }
 
@@ -191,8 +198,24 @@ func (a *Allocator) FindMemoryTypeIndexForBufferInfo(
 ) (int, common.VkResult, error) {
 	a.logger.Debug("Allocator::FindMemoryTypeIndexForBufferInfo")
 
-	// TODO: Vulkan 1.3
+	if a.extensionData.Maintenance4 != nil {
+		// khr_maintenance4 (promoted to 1.3) lets us query memory requirements with BufferCreateInfo directly
+		var memoryReqs core1_1.MemoryRequirements2
+		err := a.extensionData.Maintenance4.DeviceBufferMemoryRequirements(
+			a.device,
+			khr_maintenance4.DeviceBufferMemoryRequirements{
+				CreateInfo: bufferInfo,
+			}, &memoryReqs)
+		if err != nil {
+			return -1, core1_0.VKErrorUnknown, err
+		}
 
+		usage := uint32(bufferInfo.Usage)
+		return a.findMemoryTypeIndex(memoryReqs.MemoryRequirements.MemoryTypeBits, &o, &usage)
+	}
+
+	// Without that extension, we need to create a buffer directly, check memory requirements, and then
+	// destroy it :\
 	memReqs, res, err := a.getMemoryRequirementsFromBufferInfo(bufferInfo)
 	if err != nil {
 		return -1, res, err
@@ -208,8 +231,24 @@ func (a *Allocator) FindMemoryTypeIndexForImageInfo(
 ) (int, common.VkResult, error) {
 	a.logger.Debug("Allocator::FindMemoryTYpeIndexForImageInfo")
 
-	// TODO: Vulkan 1.3
+	if a.extensionData.Maintenance4 != nil {
+		// khr_maintenance4 (promoted to 1.3) lets us query memory requirements with ImageCreateInfo directly
+		var memoryReqs core1_1.MemoryRequirements2
+		err := a.extensionData.Maintenance4.DeviceImageMemoryRequirements(
+			a.device,
+			khr_maintenance4.DeviceImageMemoryRequirements{
+				CreateInfo: imageInfo,
+			}, &memoryReqs)
+		if err != nil {
+			return -1, core1_0.VKErrorUnknown, err
+		}
 
+		usage := uint32(imageInfo.Usage)
+		return a.findMemoryTypeIndex(memoryReqs.MemoryRequirements.MemoryTypeBits, &o, &usage)
+	}
+
+	// Without that extension, we need to create an image directly, check memory requirements, and then
+	// destroy it :\
 	memReqs, res, err := a.getMemoryRequirementsForImageInfo(imageInfo)
 	if err != nil {
 		return -1, res, err
@@ -426,7 +465,17 @@ func (a *Allocator) allocateDedicatedMemory(
 		}
 	}
 
-	// TODO: Memory priority
+	if a.extensionData.UseMemoryPriority {
+		if priority < 0 || priority > 1 {
+			return core1_0.VKErrorUnknown, errors.Errorf("attempted to allocate memory with invalid priority %f: priority must be between 0 and 1, inclusive", priority)
+		}
+
+		priorityInfo := ext_memory_priority.MemoryPriorityAllocateInfo{
+			Priority: priority,
+		}
+		priorityInfo.Next = allocInfo.Next
+		allocInfo.Next = priorityInfo
+	}
 
 	if a.extensionData.ExternalMemory {
 		exportMemoryAllocInfo := khr_external_memory.ExportMemoryAllocateInfo{
@@ -1075,6 +1124,10 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 		if err != nil {
 			return nil, core1_0.VKErrorUnknown, err
 		}
+	}
+
+	if createInfo.Priority < 0 || createInfo.Priority > 1 {
+		return nil, core1_0.VKErrorUnknown, errors.Errorf("invalid Priority value %f: priority must be between 0 and 1, inclusive", createInfo.Priority)
 	}
 
 	preferredBlockSize, err := a.calculatePreferredBlockSize(createInfo.MemoryTypeIndex)

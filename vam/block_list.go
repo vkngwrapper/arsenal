@@ -13,6 +13,7 @@ import (
 	"github.com/vkngwrapper/core/v2/core1_0"
 	"github.com/vkngwrapper/core/v2/core1_1"
 	"github.com/vkngwrapper/core/v2/core1_2"
+	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
 	"golang.org/x/exp/slog"
 	"sort"
@@ -168,6 +169,10 @@ func (l *memoryBlockList) HasNoAllocations() bool {
 }
 
 func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, error) {
+	if l.priority < 0 || l.priority > 1 {
+		panic(fmt.Sprintf("block list had an invalid priority value %f somehow: priority values should be between 0 and 1, inclusive", l.priority))
+	}
+
 	// First build MemoryAllocateInfo with all the relevant extensions
 	var allocInfo core1_0.MemoryAllocateInfo
 	allocInfo.Next = l.allocOptions
@@ -181,7 +186,13 @@ func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, erro
 		allocInfo.Next = allocFlagsInfo
 	}
 
-	// TODO: Memory priority
+	if l.extensionData.UseMemoryPriority {
+		priorityInfo := ext_memory_priority.MemoryPriorityAllocateInfo{
+			Priority: l.priority,
+		}
+		priorityInfo.Next = allocInfo.Next
+		allocInfo.Next = priorityInfo
+	}
 
 	if l.extensionData.ExternalMemory {
 		externalMemoryType := l.deviceMemory.ExternalMemoryTypes(l.memoryTypeIndex)
@@ -277,8 +288,10 @@ func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *Alloc
 		// Clean up failed allocation attempt
 		for allocIndex > 0 {
 			allocIndex--
-			// TODO: Log error
-			_ = l.Free(&allocs[allocIndex])
+			err := l.Free(&allocs[allocIndex])
+			if err != nil {
+				l.logger.LogAttrs(nil, slog.LevelError, "failed to clean up after failed allocation- Free returned an error", slog.Any("error", err))
+			}
 		}
 	}()
 
