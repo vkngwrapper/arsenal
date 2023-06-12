@@ -57,7 +57,7 @@ type CreateOptions struct {
 	VulkanCallbacks *driver.AllocationCallbacks
 
 	// MemoryCallbackOptions is an optional set of callbacks that will be executed when Vulkan memory
-	// is allocated from this allocator. It can be helpful in cases when the consumer requires allocator-
+	// is allocated from this Allocator. It can be helpful in cases when the consumer requires allocator-
 	// level info about allocated memory
 	MemoryCallbackOptions *MemoryCallbackOptions
 
@@ -80,6 +80,9 @@ type CreateOptions struct {
 }
 
 // New creates a new Allocator
+//
+// logger - The Allocator, along with Allocation and Pool objects created from it, will write to this
+// logger when it has something to say.
 //
 // instance - The instance that owns the provided Device
 //
@@ -146,10 +149,7 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 	typeCount := allocator.deviceMemory.MemoryTypeCount()
 	for typeIndex := 0; typeIndex < typeCount; typeIndex++ {
 		if allocator.globalMemoryTypeBits&(1<<typeIndex) != 0 {
-			preferredBlockSize, err := allocator.calculatePreferredBlockSize(typeIndex)
-			if err != nil {
-				return nil, err
-			}
+			preferredBlockSize := allocator.calculatePreferredBlockSize(typeIndex)
 			allocator.memoryBlockLists[typeIndex] = &memoryBlockList{}
 			allocator.dedicatedAllocations[typeIndex] = &dedicatedAllocationList{}
 
@@ -180,7 +180,7 @@ const (
 	smallHeapMaxSize int = 1024 * 1024 * 1024 // 1 GB
 )
 
-func (a *Allocator) calculatePreferredBlockSize(memTypeIndex int) (int, error) {
+func (a *Allocator) calculatePreferredBlockSize(memTypeIndex int) int {
 	heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memTypeIndex)
 
 	heapSize := a.deviceMemory.MemoryHeapProperties(heapIndex).Size
@@ -189,9 +189,12 @@ func (a *Allocator) calculatePreferredBlockSize(memTypeIndex int) (int, error) {
 		rawSize = heapSize / 8
 	}
 
-	return memutils.AlignUp(rawSize, 32), nil
+	return memutils.AlignUp(rawSize, 32)
 }
 
+// Destroy annihilates this allocator. It should be called before the end of your application. It will
+// fail if any Pool objects created from it have not yet been destroyed, and it will fail if any Allocation
+// objects have not yet been freed, so it's a reasonably good way to locate memory leaks.
 func (a *Allocator) Destroy() error {
 	a.poolsMutex.Lock()
 	defer a.poolsMutex.Unlock()

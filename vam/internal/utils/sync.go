@@ -26,6 +26,14 @@ type OptionalRWMutex struct {
 	UseMutex bool
 }
 
+func (m *OptionalRWMutex) TryLock() bool {
+	if m.UseMutex {
+		return m.Mutex.TryLock()
+	}
+
+	return true
+}
+
 func (m *OptionalRWMutex) Lock() {
 	if m.UseMutex {
 		m.Mutex.Lock()

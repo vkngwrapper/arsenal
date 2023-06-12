@@ -2,6 +2,7 @@ package vam
 
 import "github.com/vkngwrapper/core/v2/common"
 
+// PoolCreateFlags is a set of flags that each correspond to a single option related to a Pool object's behavior
 type PoolCreateFlags int32
 
 var poolCreateFlagsMapping = common.NewFlagStringMapping[PoolCreateFlags]()

@@ -11,14 +11,13 @@ import (
 
 type BlockMetadata interface {
 	Init(size int)
-	Destroy()
-	IsVirtual() bool
 	Size() int
 
 	Validate() error
 	AllocationCount() int
 	FreeRegionsCount() int
 	SumFreeSize() int
+	GranularityHandler() GranularityCheck
 
 	IsEmpty() bool
 
@@ -41,10 +40,10 @@ type BlockMetadata interface {
 	CreateAllocationRequest(
 		allocSize int, allocAlignment uint,
 		upperAddress bool,
-		allocType SuballocationType,
-		strategy memutils.AllocationCreateFlags,
+		allocType uint32,
+		strategy AllocationStrategy,
 	) (bool, AllocationRequest, error)
-	Alloc(request AllocationRequest, allocType SuballocationType, userData any) error
+	Alloc(request AllocationRequest, allocType uint32, userData any) error
 
 	Free(allocHandle BlockAllocationHandle) error
 }
@@ -53,14 +52,14 @@ type BlockMetadataBase struct {
 	size                  int
 	allocationCallbacks   *driver.AllocationCallbacks
 	bufferImageGranlarity int
-	isVirtual             bool
+	granularityHandler    GranularityCheck
 }
 
-func NewBlockMetadata(bufferImageGranularity int, isVirtual bool) BlockMetadataBase {
+func NewBlockMetadata(bufferImageGranularity int, granularityHandler GranularityCheck) BlockMetadataBase {
 	return BlockMetadataBase{
 		size:                  0,
 		bufferImageGranlarity: bufferImageGranularity,
-		isVirtual:             isVirtual,
+		granularityHandler:    granularityHandler,
 	}
 }
 
@@ -68,23 +67,15 @@ func (m *BlockMetadataBase) Init(size int) {
 	m.size = size
 }
 
-func (m *BlockMetadataBase) IsVirtual() bool {
-	return m.isVirtual
-}
-
 func (m *BlockMetadataBase) Size() int { return m.size }
+
+func (m *BlockMetadataBase) GranularityHandler() GranularityCheck {
+	return m.granularityHandler
+}
 
 func (m *BlockMetadataBase) PrintDetailedMap_Header(json jwriter.ObjectState, unusedBytes, allocationCount, unusedRangeCount int) {
 	json.Name("TotalBytes").Int(m.Size())
 	json.Name("UnusedBytes").Int(unusedBytes)
 	json.Name("Allocations").Int(allocationCount)
 	json.Name("UnusedRanges").Int(unusedRangeCount)
-}
-
-func (m *BlockMetadataBase) DebugMargin() int {
-	if m.isVirtual {
-		return 0
-	}
-
-	return memutils.DebugMargin
 }

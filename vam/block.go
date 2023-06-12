@@ -18,8 +18,9 @@ type deviceMemoryBlock struct {
 	memoryTypeIndex int
 	logger          *slog.Logger
 
-	metadata     metadata.BlockMetadata
-	deviceMemory *vulkan.DeviceMemoryProperties
+	metadata           metadata.BlockMetadata
+	deviceMemory       *vulkan.DeviceMemoryProperties
+	granularityHandler BlockBufferImageGranularity
 }
 
 func (b *deviceMemoryBlock) Init(
@@ -43,13 +44,15 @@ func (b *deviceMemoryBlock) Init(
 	b.memory = newMemory
 	b.deviceMemory = deviceMemory
 	b.logger = logger
+	b.granularityHandler.bufferImageGranularity = uint(bufferImageGranularity)
+	b.granularityHandler.Init(newSize)
 
 	switch algorithm {
 	case 0:
-		b.metadata = metadata.NewTLSFBlockMetadata(bufferImageGranularity, false)
+		b.metadata = metadata.NewTLSFBlockMetadata(bufferImageGranularity, &b.granularityHandler)
 		break
 	case PoolCreateLinearAlgorithm:
-		b.metadata = metadata.NewLinearBlockMetadata(bufferImageGranularity, false)
+		b.metadata = metadata.NewLinearBlockMetadata(bufferImageGranularity, &b.granularityHandler)
 		break
 	default:
 		panic(fmt.Sprintf("unknown pool algorithm: %s", algorithm.String()))
@@ -71,7 +74,6 @@ func (b *deviceMemoryBlock) Destroy() error {
 	}
 
 	b.deviceMemory.FreeVulkanMemory(b.memoryTypeIndex, b.metadata.Size(), b.memory)
-	b.metadata.Destroy()
 
 	b.memory = nil
 	b.metadata = nil

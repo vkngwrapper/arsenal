@@ -2,6 +2,9 @@ package vam
 
 import "github.com/vkngwrapper/core/v2/core1_0"
 
+// AllocateDeviceMemoryCallback is a callback that fires when new device memory is allocated from Vulkan.
+// It does not fire with every new Allocation object, since device memory is frequently reused for block
+// allocations.
 type AllocateDeviceMemoryCallback func(
 	allocator *Allocator,
 	memoryType int,
@@ -10,6 +13,8 @@ type AllocateDeviceMemoryCallback func(
 	userData interface{},
 )
 
+// FreeDeviceMemoryCallback is a callback that fires when device memory is freed from Vulkan. It does
+// not fire with every call to Allocation.Free(), since device memory is frequently reused for block allocations.
 type FreeDeviceMemoryCallback func(
 	allocator *Allocator,
 	memoryType int,
@@ -18,6 +23,9 @@ type FreeDeviceMemoryCallback func(
 	userData interface{},
 )
 
+// MemoryCallbackOptions allows optional Allocate and Free callbacks to be fired from an Allocator.
+// The UserData field indicates the userData parameter that will be passed to Allocate and Free
+// callbacks.
 type MemoryCallbackOptions struct {
 	Allocate AllocateDeviceMemoryCallback
 	Free     FreeDeviceMemoryCallback

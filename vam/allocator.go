@@ -5,7 +5,6 @@ import (
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
-	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
@@ -25,6 +24,12 @@ import (
 	"unsafe"
 )
 
+const (
+	createdFillPattern   uint8 = 0xDC
+	destroyedFillPattern uint8 = 0xEF
+)
+
+// Allocator is vam's root object and is used to create Pool and Allocation objects
 type Allocator struct {
 	useMutex            bool
 	logger              *slog.Logger
@@ -48,6 +53,8 @@ type Allocator struct {
 	dedicatedAllocations [common.MaxMemoryTypes]*dedicatedAllocationList
 }
 
+// AllocatorStatistics is used to get the current state of memory within an Allocator, including
+// breakdowns by memory type and heap of currently-allocated memory
 type AllocatorStatistics struct {
 	MemoryTypes [common.MaxMemoryTypes]memutils.DetailedStatistics
 	MemoryHeaps [common.MaxMemoryHeaps]memutils.DetailedStatistics
@@ -58,18 +65,18 @@ func (a *Allocator) calcAllocationParams(
 	o *AllocationCreateInfo,
 	requiresDedicatedAllocation bool,
 ) (common.VkResult, error) {
-	hostAccessFlags := o.Flags & (memutils.AllocationCreateHostAccessSequentialWrite | memutils.AllocationCreateHostAccessRandom)
-	if hostAccessFlags == (memutils.AllocationCreateHostAccessSequentialWrite | memutils.AllocationCreateHostAccessRandom) {
+	hostAccessFlags := o.Flags & (AllocationCreateHostAccessSequentialWrite | AllocationCreateHostAccessRandom)
+	if hostAccessFlags == (AllocationCreateHostAccessSequentialWrite | AllocationCreateHostAccessRandom) {
 		return core1_0.VKErrorUnknown, errors.New("AllocationCreateHostAccessSequentialWrite and AllocationCreateHostAccessRandom cannot both be specified")
 	}
 
-	if hostAccessFlags == 0 && (o.Flags&memutils.AllocationCreateHostAccessAllowTransferInstead) != 0 {
+	if hostAccessFlags == 0 && (o.Flags&AllocationCreateHostAccessAllowTransferInstead) != 0 {
 		return core1_0.VKErrorUnknown, errors.New("if AllocationCreateHostAccessAllowTransferInstead is specified, " +
 			"either AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom must be specified as well")
 	}
 
 	if o.Usage == MemoryUsageAuto || o.Usage == MemoryUsageAutoPreferDevice || o.Usage == MemoryUsageAutoPreferHost {
-		if hostAccessFlags == 0 && o.Flags&memutils.AllocationCreateMapped != 0 {
+		if hostAccessFlags == 0 && o.Flags&AllocationCreateMapped != 0 {
 			return core1_0.VKErrorUnknown, errors.New("when using MemoryUsageAuto* with AllocationCreateMapped, either " +
 				"AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom must be specified as well")
 		}
@@ -77,24 +84,24 @@ func (a *Allocator) calcAllocationParams(
 
 	// GPU lazily allocated requires dedicated allocations
 	if requiresDedicatedAllocation || o.Usage == MemoryUsageGPULazilyAllocated {
-		o.Flags |= memutils.AllocationCreateDedicatedMemory
+		o.Flags |= AllocationCreateDedicatedMemory
 	}
 
 	if o.Pool != nil {
-		if o.Pool.blockList.HasExplicitBlockSize() && o.Flags&memutils.AllocationCreateDedicatedMemory != 0 {
+		if o.Pool.blockList.HasExplicitBlockSize() && o.Flags&AllocationCreateDedicatedMemory != 0 {
 			return core1_0.VKErrorUnknown, errors.New("specified memutils.AllocationCreateDedicatedMemory with a pool that does not support it")
 		}
 
 		o.Priority = o.Pool.blockList.priority
 	}
 
-	if o.Flags&memutils.AllocationCreateDedicatedMemory != 0 && o.Flags&memutils.AllocationCreateNeverAllocate != 0 {
+	if o.Flags&AllocationCreateDedicatedMemory != 0 && o.Flags&AllocationCreateNeverAllocate != 0 {
 		return core1_0.VKErrorUnknown, errors.New("AllocationCreateDedicatedMemory and AllocationCreateNeverAllocate cannot be specified together")
 	}
 
 	if o.Usage != MemoryUsageAuto && o.Usage != MemoryUsageAutoPreferDevice && o.Usage != MemoryUsageAutoPreferHost {
 		if hostAccessFlags == 0 {
-			o.Flags |= memutils.AllocationCreateHostAccessRandom
+			o.Flags |= AllocationCreateHostAccessRandom
 		}
 	}
 
@@ -104,7 +111,7 @@ func (a *Allocator) calcAllocationParams(
 func (a *Allocator) findMemoryPreferences(
 	o *AllocationCreateInfo,
 	bufferOrImageUsage *uint32,
-) (requiredFlags, preferredFlags, notPreferredFlags core1_0.MemoryPropertyFlags, err error) {
+) (requiredFlags, preferredFlags, notPreferredFlags core1_0.MemoryPropertyFlags) {
 	isIntegratedGPU := a.deviceMemory.IsIntegratedGPU()
 	requiredFlags = o.RequiredFlags
 	preferredFlags = o.PreferredFlags
@@ -126,9 +133,9 @@ func (a *Allocator) findMemoryPreferences(
 				deviceAccess = (*bufferOrImageUsage & nonTransferUsages) != 0
 			}
 
-			hostAccessSequentialWrite := o.Flags&memutils.AllocationCreateHostAccessSequentialWrite != 0
-			hostAccessRandom := o.Flags&memutils.AllocationCreateHostAccessRandom != 0
-			hostAccessAllowTransferInstead := o.Flags&memutils.AllocationCreateHostAccessAllowTransferInstead != 0
+			hostAccessSequentialWrite := o.Flags&AllocationCreateHostAccessSequentialWrite != 0
+			hostAccessRandom := o.Flags&AllocationCreateHostAccessRandom != 0
+			hostAccessAllowTransferInstead := o.Flags&AllocationCreateHostAccessAllowTransferInstead != 0
 			preferDevice := o.Usage == MemoryUsageAutoPreferDevice
 			preferHost := o.Usage == MemoryUsageAutoPreferHost
 
@@ -180,9 +187,22 @@ func (a *Allocator) findMemoryPreferences(
 
 		notPreferredFlags |= amd_device_coherent_memory.MemoryPropertyDeviceUncachedAMD
 	}
-	return requiredFlags, preferredFlags, notPreferredFlags, nil
+	return requiredFlags, preferredFlags, notPreferredFlags
 }
 
+// FindMemoryTypeIndex gets the memory type that should be used for a requested allocation, as provided
+// by an AllocationCreateInfo. This can be used to decide what memoryTypeIndex to use when creating a
+// Pool, or in any situation where you want a good memory type to be intelligently selected without actually
+// allocating memory.
+//
+// Because this method does not accept a core1_0.BufferCreateInfo or core1_0.ImageCreateInfo, it can't be
+// all that intelligent about how it chooses the memory type. You can help it by providing RequiredFlags
+// and PreferredFlags in the AllocationCreateInfo object.
+//
+// memoryTypeBits - You can use this bitmask to prevent this method from returning memory types you
+// don't want.
+//
+// o - Options indicating the sort of allocation being made
 func (a *Allocator) FindMemoryTypeIndex(
 	memoryTypeBits uint32,
 	o AllocationCreateInfo,
@@ -192,6 +212,15 @@ func (a *Allocator) FindMemoryTypeIndex(
 	return a.findMemoryTypeIndex(memoryTypeBits, &o, nil)
 }
 
+// FindMemoryTypeIndexForBufferInfo gets the memory type that should be used for a requested allocation,
+// as provided by the combination of an AllocationCreateInfo and a core1_0.BufferCreateInfo. This can be
+// used to decide what memory type index to use when creating a Pool, or in any situation where you want
+// a good memory type to be intelligently selected without actually allocating memory. The memory type
+// index returned will be for the memory type that is best for a buffer created with the provided core1_0.BufferCreateInfo.
+//
+// bufferInfo - The core1_0.BufferCreateInfo that will be used to create the eventual buffer
+//
+// o - Options indicating the sort of allocation being made
 func (a *Allocator) FindMemoryTypeIndexForBufferInfo(
 	bufferInfo core1_0.BufferCreateInfo,
 	o AllocationCreateInfo,
@@ -225,6 +254,16 @@ func (a *Allocator) FindMemoryTypeIndexForBufferInfo(
 	return a.findMemoryTypeIndex(memReqs.MemoryTypeBits, &o, &usage)
 }
 
+// FindMemoryTypeIndexForImageInfo gets the memory type that should be used for a requested allocation,
+// as provided by the combination of an AllocationCreateInfo and a core1_0.ImageCreateInfo. This can be
+// used to decide what memory type index to use when creating a Pool, or in any situation where you want
+// a good memory type to be intelligently selected without actually allocating memory. The memory type
+// index returned will be for the memory type that is best for an image created with the provided
+// core1_0.ImageCreateInfo
+//
+// imageInfo - The core1_0.ImageCreateInfo that will be used to create the eventual image
+//
+// o - Options indicating the sort of allocation being made
 func (a *Allocator) FindMemoryTypeIndexForImageInfo(
 	imageInfo core1_0.ImageCreateInfo,
 	o AllocationCreateInfo,
@@ -292,11 +331,7 @@ func (a *Allocator) findMemoryTypeIndex(
 		memoryTypeBits &= o.MemoryTypeBits
 	}
 
-	requiredFlags, preferredFlags, notPreferredFlags, err := a.findMemoryPreferences(o, bufferOrImageUsage)
-	if err != nil {
-		return 0, core1_0.VKErrorFeatureNotPresent, err
-	}
-
+	requiredFlags, preferredFlags, notPreferredFlags := a.findMemoryPreferences(o, bufferOrImageUsage)
 	bestMemoryTypeIndex := -1
 	minCost := math.MaxInt
 
@@ -339,14 +374,14 @@ func (a *Allocator) calculateMemoryTypeParameters(
 	allocationCount int,
 ) (common.VkResult, error) {
 	// If memory type is not HOST_VISIBLE, disable MAPPED
-	if options.Flags&memutils.AllocationCreateMapped != 0 &&
+	if options.Flags&AllocationCreateMapped != 0 &&
 		a.deviceMemory.MemoryTypeProperties(memoryTypeIndex).PropertyFlags&core1_0.MemoryPropertyHostVisible == 0 {
-		options.Flags &= ^memutils.AllocationCreateMapped
+		options.Flags &= ^AllocationCreateMapped
 	}
 
 	// Check budget if appropriate
-	if options.Flags&memutils.AllocationCreateDedicatedMemory != 0 &&
-		options.Flags&memutils.AllocationCreateWithinBudget != 0 {
+	if options.Flags&AllocationCreateDedicatedMemory != 0 &&
+		options.Flags&AllocationCreateWithinBudget != 0 {
 		heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex)
 
 		budget := vulkan.Budget{}
@@ -362,7 +397,7 @@ func (a *Allocator) calculateMemoryTypeParameters(
 func (a *Allocator) allocateDedicatedMemoryPage(
 	pool *Pool,
 	size int,
-	suballocationType metadata.SuballocationType,
+	suballocationType SuballocationType,
 	memoryTypeIndex int,
 	allocInfo core1_0.MemoryAllocateInfo,
 	doMap, isMappingAllowed bool,
@@ -401,7 +436,7 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 	a.deviceMemory.AddAllocation(a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex), size)
 
 	if memutils.DebugMargin > 0 {
-		alloc.fillAllocation(memutils.CreatedFillPattern)
+		alloc.fillAllocation(createdFillPattern)
 	}
 
 	return core1_0.VKSuccess, nil
@@ -410,7 +445,7 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 func (a *Allocator) allocateDedicatedMemory(
 	pool *Pool,
 	size int,
-	suballocationType metadata.SuballocationType,
+	suballocationType SuballocationType,
 	dedicatedAllocations *dedicatedAllocationList,
 	memoryTypeIndex int,
 	doMap, isMappingAllowed, canAliasMemory bool,
@@ -540,7 +575,7 @@ func (a *Allocator) allocateMemoryOfType(
 	dedicatedBufferOrImageUsage *uint32,
 	createInfo *AllocationCreateInfo,
 	memoryTypeIndex int,
-	suballocationType metadata.SuballocationType,
+	suballocationType SuballocationType,
 	dedicatedAllocations *dedicatedAllocationList,
 	blockAllocations *memoryBlockList,
 	allocations []Allocation,
@@ -561,18 +596,18 @@ func (a *Allocator) allocateMemoryOfType(
 		return res, err
 	}
 
-	mappingAllowed := finalCreateInfo.Flags&(memutils.AllocationCreateHostAccessSequentialWrite|memutils.AllocationCreateHostAccessRandom) != 0
+	mappingAllowed := finalCreateInfo.Flags&(AllocationCreateHostAccessSequentialWrite|AllocationCreateHostAccessRandom) != 0
 
-	if finalCreateInfo.Flags&memutils.AllocationCreateDedicatedMemory != 0 {
+	if finalCreateInfo.Flags&AllocationCreateDedicatedMemory != 0 {
 		return a.allocateDedicatedMemory(
 			pool,
 			size,
 			suballocationType,
 			dedicatedAllocations,
 			memoryTypeIndex,
-			finalCreateInfo.Flags&memutils.AllocationCreateMapped != 0,
+			finalCreateInfo.Flags&AllocationCreateMapped != 0,
 			mappingAllowed,
-			finalCreateInfo.Flags&memutils.AllocationCreateCanAlias != 0,
+			finalCreateInfo.Flags&AllocationCreateCanAlias != 0,
 			finalCreateInfo.UserData,
 			finalCreateInfo.Priority,
 			dedicatedBuffer,
@@ -583,7 +618,7 @@ func (a *Allocator) allocateMemoryOfType(
 		)
 	}
 
-	canAllocateDedicated := finalCreateInfo.Flags&memutils.AllocationCreateNeverAllocate == 0 && (pool == nil || !blockAllocations.HasExplicitBlockSize())
+	canAllocateDedicated := finalCreateInfo.Flags&AllocationCreateNeverAllocate == 0 && (pool == nil || !blockAllocations.HasExplicitBlockSize())
 
 	if canAllocateDedicated {
 		// Allocate dedicated memory if requested size is more than half of preferred block size
@@ -605,9 +640,9 @@ func (a *Allocator) allocateMemoryOfType(
 				suballocationType,
 				dedicatedAllocations,
 				memoryTypeIndex,
-				finalCreateInfo.Flags&memutils.AllocationCreateMapped != 0,
+				finalCreateInfo.Flags&AllocationCreateMapped != 0,
 				mappingAllowed,
-				finalCreateInfo.Flags&memutils.AllocationCreateCanAlias != 0,
+				finalCreateInfo.Flags&AllocationCreateCanAlias != 0,
 				finalCreateInfo.UserData,
 				finalCreateInfo.Priority,
 				dedicatedBuffer,
@@ -642,9 +677,9 @@ func (a *Allocator) allocateMemoryOfType(
 			suballocationType,
 			dedicatedAllocations,
 			memoryTypeIndex,
-			finalCreateInfo.Flags&memutils.AllocationCreateMapped != 0,
+			finalCreateInfo.Flags&AllocationCreateMapped != 0,
 			mappingAllowed,
-			finalCreateInfo.Flags&memutils.AllocationCreateCanAlias != 0,
+			finalCreateInfo.Flags&AllocationCreateCanAlias != 0,
 			finalCreateInfo.UserData,
 			finalCreateInfo.Priority,
 			dedicatedBuffer,
@@ -671,7 +706,7 @@ func (a *Allocator) multiAllocateMemory(
 	dedicatedImage core1_0.Image,
 	dedicatedBufferOrImageUsage *uint32,
 	options *AllocationCreateInfo,
-	suballocType metadata.SuballocationType,
+	suballocType SuballocationType,
 	outAllocations []Allocation,
 ) (common.VkResult, error) {
 	err := memutils.CheckPow2(memoryRequirements.Alignment, "core1_0.MemoryRequirements.Alignment")
@@ -748,6 +783,25 @@ func (a *Allocator) multiAllocateMemory(
 	return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
 }
 
+// AllocateMemory allocates memory according to provided memory requirements and AllocationCreateInfo
+// and assigns it to a provided Allocation object.
+//
+// Because this method does not accept a core1_0.BufferCreateInfo or core1_0.ImageCreateInfo, it can't be
+// all that intelligent about how it chooses the memory type. You can help it by providing RequiredFlags
+// and PreferredFlags in the AllocationCreateInfo object.
+//
+// Return errors will mostly come from Vulkan, but key parameter validation will also return errors:
+// if any parameter is nil, if memoryRequirements has a zero or negative size, if memoryRequirements has
+// an alignment that is not a power of 2, or if outAlloc already contains an active allocation.
+//
+// memoryRequirements - A pointer to a populated core1_0.MemoryRequirements object indicating the size and other
+// properties the allocation should have
+//
+// o - Options indicating the sort of allocation being made
+//
+// outAlloc - A pointer to a valid Allocation that has not yet been allocated to (or has been recently freed). Passing
+// an Allocation object to this method will cause it to escape to the heap, but because freed allocations can
+// be reused, it is valid to get them from a sync.Pool
 func (a *Allocator) AllocateMemory(memoryRequirements *core1_0.MemoryRequirements, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
 	a.logger.Debug("Allocator::AllocateMemory")
 
@@ -755,6 +809,8 @@ func (a *Allocator) AllocateMemory(memoryRequirements *core1_0.MemoryRequirement
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil allocation")
 	} else if memoryRequirements == nil {
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate with nil memory requirements")
+	} else if outAlloc.memory != nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
 	}
 
 	// Attempt to create a one-length slice for the provided alloc pointer
@@ -765,11 +821,29 @@ func (a *Allocator) AllocateMemory(memoryRequirements *core1_0.MemoryRequirement
 		false,
 		nil, nil, nil,
 		&o,
-		metadata.SuballocationUnknown,
+		SuballocationUnknown,
 		outAllocSlice,
 	)
 }
 
+// AllocateMemorySlice allocates several tranches of memory according to a provided core1_0.MemoryRequirements and
+// AllocationCreateInfo and assigns them to a slice of provided Allocation objects.
+//
+// Because this method does not accept a core1_0.BufferCreateInfo or core1_0.ImageCreateInfo, it can't be
+// all that intelligent about how it chooses the memory type. You can help it by providing RequiredFlags
+// and PreferredFlags in the AllocationCreateInfo object.
+//
+// Return errors will mostly come from Vulkan, but key parameter validation will also return errors:
+// if any memoryRequirements is nil, if memoryRequirements has a zero or negative size, if memoryRequirements has
+// an alignment that is not a power of 2, or if any element of allocations already contains an active allocation.
+//
+// memoryRequirements - A pointer to a populated core1_0.MemoryRequirements object indicating the size and other
+// properties the allocation should have
+//
+// o - Options indicating the sort of allocation being made
+//
+// outAlloc - A slice of Allocation objects that have not yet been allocated to (or have been recently freed). Passing
+// a slice to this method will cause it to escape to the heap.
 func (a *Allocator) AllocateMemorySlice(memoryRequirements *core1_0.MemoryRequirements, o AllocationCreateInfo, allocations []Allocation) (common.VkResult, error) {
 	a.logger.Debug("Allocator::AllocateMemorySlice")
 
@@ -781,6 +855,12 @@ func (a *Allocator) AllocateMemorySlice(memoryRequirements *core1_0.MemoryRequir
 		return core1_0.VKSuccess, nil
 	}
 
+	for allocIndex, alloc := range allocations {
+		if alloc.memory != nil {
+			return core1_0.VKErrorUnknown, errors.Errorf("attempted to overwrite an unfreed allocation at index %d", allocIndex)
+		}
+	}
+
 	return a.multiAllocateMemory(
 		memoryRequirements,
 		false,
@@ -789,11 +869,24 @@ func (a *Allocator) AllocateMemorySlice(memoryRequirements *core1_0.MemoryRequir
 		nil,
 		nil,
 		&o,
-		metadata.SuballocationUnknown,
+		SuballocationUnknown,
 		allocations,
 	)
 }
 
+// AllocateMemoryForBuffer allocates memory ideal for the provided core1_0.Buffer and AllocationCreateInfo and
+// assigns it to a provided Allocation object. The buffer is not bound to the allocated memory.
+//
+// Return errors will mostly come from Vulkan, but key parameter validation will also return errors:
+// if any parameter is nil or if outAlloc already contains an active allocation.
+//
+// buffer - A core1_0.Buffer object indicating the buffer that memory will be allocated for
+//
+// o - Options indicating the sort of allocation being made
+//
+// outAlloc - A pointer to a valid Allocation that has not yet been allocated to (or has been recently freed). Passing
+// an Allocation object to this method will cause it to escape to the heap, but because freed allocations can
+// be reused, it is valid to get them from a sync.Pool
 func (a *Allocator) AllocateMemoryForBuffer(buffer core1_0.Buffer, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
 	a.logger.Debug("Allocator::AllocateMemoryForBuffer")
 
@@ -801,6 +894,8 @@ func (a *Allocator) AllocateMemoryForBuffer(buffer core1_0.Buffer, o AllocationC
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate for a nil buffer")
 	} else if outAlloc == nil {
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil allocation")
+	} else if outAlloc.memory != nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
 	}
 
 	var memReqs core1_0.MemoryRequirements
@@ -819,7 +914,7 @@ func (a *Allocator) AllocateMemoryForBuffer(buffer core1_0.Buffer, o AllocationC
 		nil,
 		nil,
 		&o,
-		metadata.SuballocationBuffer,
+		SuballocationBuffer,
 		outAllocSlice,
 	)
 }
@@ -850,6 +945,19 @@ func (a *Allocator) getBufferMemoryRequirements(buffer core1_0.Buffer, memoryReq
 	return false, false, nil
 }
 
+// AllocateMemoryForImage allocates memory ideal for the provided core1_0.Image and AllocationCreateInfo and
+// assigns it to a provided Allocation object. The image is not bound to the allocated memory.
+//
+// Return errors will mostly come from Vulkan, but key parameter validation will also return errors:
+// if any parameter is nil or if outAlloc already contains an active allocation.
+//
+// image - A core1_0.Image object indicating the image that memory will be allocated for
+//
+// o - Options indicating the sort of allocation being made
+//
+// outAlloc - A pointer to a valid Allocation that has not yet been allocated to (or has been recently freed). Passing
+// an Allocation object to this method will cause it to escape to the heap, but because freed allocations can
+// be reused, it is valid to get them from a sync.Pool
 func (a *Allocator) AllocateMemoryForImage(image core1_0.Image, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
 	a.logger.Debug("Allocator::AllocateMemoryForImage")
 
@@ -857,6 +965,8 @@ func (a *Allocator) AllocateMemoryForImage(image core1_0.Image, o AllocationCrea
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate for a nil image")
 	} else if outAlloc == nil {
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil allocation")
+	} else if outAlloc.memory != nil {
+		return core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
 	}
 
 	var memReqs core1_0.MemoryRequirements
@@ -875,7 +985,7 @@ func (a *Allocator) AllocateMemoryForImage(image core1_0.Image, o AllocationCrea
 		image,
 		nil,
 		&o,
-		metadata.SuballocationImageUnknown,
+		SuballocationImageUnknown,
 		outAllocSlice,
 	)
 }
@@ -906,6 +1016,8 @@ func (a *Allocator) getImageMemoryRequirements(image core1_0.Image, memoryRequir
 	return false, false, nil
 }
 
+// FreeAllocationSlice is a convenience method that is roughly equivalent to calling Allocation.Free on an
+// entire slice of allocations.
 func (a *Allocator) FreeAllocationSlice(allocs []Allocation) error {
 	a.logger.Debug("Allocator::FreeAllocationSlice")
 
@@ -919,13 +1031,14 @@ func (a *Allocator) FreeAllocationSlice(allocs []Allocation) error {
 func (a *Allocator) multiFreeMemory(allocs []Allocation) error {
 	for i := 0; i < len(allocs); i++ {
 		if memutils.DebugMargin > 0 {
-			allocs[i].fillAllocation(memutils.DestroyedFillPattern)
+			allocs[i].fillAllocation(destroyedFillPattern)
 		}
 
 		err := a.freeSingleAllocation(&allocs[i])
 		if err != nil {
 			return err
 		}
+		allocs[i].memory = nil
 	}
 
 	return nil
@@ -973,6 +1086,8 @@ func (a *Allocator) freeDedicatedMemory(alloc *Allocation) {
 	a.logger.LogAttrs(nil, slog.LevelDebug, "    Freed DedicatedMemory", slog.Int("MemoryTypeIndex", memoryTypeIndex))
 }
 
+// FlushAllocationSlice is a convenience method that is roughly equivalent to, but may be slightly more
+// performant than, calling Allocation.Flush on a slice of allocations.
 func (a *Allocator) FlushAllocationSlice(allocations []Allocation, offsets []int, sizes []int) (common.VkResult, error) {
 	a.logger.Debug("Allocator::FlushAllocationSlice")
 
@@ -991,6 +1106,8 @@ func (a *Allocator) FlushAllocationSlice(allocations []Allocation, offsets []int
 	return a.flushOrInvalidateAllocations(allocations, offsets, sizes, vulkan.CacheOperationFlush)
 }
 
+// InvalidateAllocationSlice is a convenience method that is roughly equivalent to, but may be slightly more
+// performant than, calling Allocation.Invalidate on a slice of allocations
 func (a *Allocator) InvalidateAllocationSlice(allocations []Allocation, offsets []int, sizes []int) (common.VkResult, error) {
 	a.logger.Debug("Allocator::InvalidateAllocationSlize")
 
@@ -1039,6 +1156,13 @@ func (a *Allocator) flushOrInvalidateAllocations(allocations []Allocation, offse
 	panic(fmt.Sprintf("unknown cache operation %s", operation.String()))
 }
 
+// CheckCorruption verifies the internal consistency and integrity of a set of memory types indicated
+// by the memoryTypeBits mask. This will return VKErrorFeatureNotPresent if there are no memory types
+// in the mask that have corruption-checking active, or VKSuccess if at least one memory type was
+// checked for corruption, and no corruption was found. All other errors indicate some form of corruption.
+//
+// For corruption detection to be active, the memory type has to support memory mapping, and the binary needs
+// to have been built with the debug_mem_utils build tag
 func (a *Allocator) CheckCorruption(memoryTypeBits uint32) (common.VkResult, error) {
 	a.logger.Debug("Allocator::CheckCorruption")
 
@@ -1100,6 +1224,11 @@ func (a *Allocator) checkCustomPools(memoryTypeBits uint32) (common.VkResult, er
 	return res, res.ToError()
 }
 
+// CreatePool creates a custom memory pool that can be used for unusual allocation cases. See Pool for more
+// information.
+//
+// VKErrorFeatureNotPresent will be returned if the provided MemoryTypeIndex is invalid or not present in
+// this Allocator. Other errors are for other obvious forms of parameter validation.
 func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResult, error) {
 
 	a.logger.LogAttrs(nil, slog.LevelDebug, "Allocator::CreatePool",
@@ -1130,11 +1259,7 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 		return nil, core1_0.VKErrorUnknown, errors.Errorf("invalid Priority value %f: priority must be between 0 and 1, inclusive", createInfo.Priority)
 	}
 
-	preferredBlockSize, err := a.calculatePreferredBlockSize(createInfo.MemoryTypeIndex)
-	if err != nil {
-		return nil, core1_0.VKErrorUnknown, err
-	}
-
+	preferredBlockSize := a.calculatePreferredBlockSize(createInfo.MemoryTypeIndex)
 	pool := &Pool{
 		parentAllocator: a,
 		logger:          a.logger,
@@ -1181,7 +1306,7 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 	a.poolsMutex.Lock()
 	defer a.poolsMutex.Unlock()
 
-	err = pool.SetID(a.nextPoolId)
+	err = pool.setID(a.nextPoolId)
 	if err != nil {
 		destroyErr := pool.destroyAfterLock()
 		if destroyErr != nil {
@@ -1201,6 +1326,11 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 	return pool, core1_0.VKSuccess, nil
 }
 
+// BeginDefragmentation populates a provided DefragmentationContext object and prepares it to run a defragmentation
+// process. See the README for more information about defragmentation.
+//
+// This method will return an error if defragContext is nil. defragContext will escape to the heap if passed
+// to this method, but it can be reused multiple times.
 func (a *Allocator) BeginDefragmentation(o DefragmentationInfo, defragContext *DefragmentationContext) (common.VkResult, error) {
 	a.logger.Debug("Allocator::BeginDefragmentation")
 
@@ -1221,21 +1351,62 @@ func (a *Allocator) BeginDefragmentation(o DefragmentationInfo, defragContext *D
 	return core1_0.VKSuccess, nil
 }
 
+// CreateBuffer creates a brand new core1_0.Buffer for the provided core1_0.BufferCreateInfo, allocates memory
+// to support it using the core1_0.BufferCreateInfo and AllocationCreateInfo, assigns the allocation to the provided
+// Allocation, and binds the Buffer to the Allocation.
+//
+// This method will return VKErrorExtensionNotPresent if the bufferInfo.Usage attempts to use Shader Device Address
+// but the khr_buffer_device_address extension is not available (and core 1.2 is not active). Validation errors
+// will return if any parameter is nil or if outAlloc already contains an active allocation. Other VKErrorUnknown
+// errors indicate an issue with the bufferInfo object, such as 0 size or a requested size that cannot fit within
+// this Allocation. Other errors come from Vulkan.
+//
+// bufferInfo - A core1_0.BufferCreateInfo describing the Buffer to create
+//
+// allocInfo - Options indicating the sort of allocation being made
+//
+// outAlloc - A pointer to a valid Allocation that has not yet been allocated to (or has been recently freed). Passing
+// an Allocation object to this method will cause it to escape to the heap, but because freed allocations can
+// be reused, it is valid to get them from a sync.Pool
 func (a *Allocator) CreateBuffer(bufferInfo core1_0.BufferCreateInfo, allocInfo AllocationCreateInfo, outAlloc *Allocation) (core1_0.Buffer, common.VkResult, error) {
 	a.logger.Debug("Allocator::CreateBuffer")
 
 	if outAlloc == nil {
 		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
+	} else if outAlloc.memory != nil {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
 	}
 
 	return a.createBuffer(&bufferInfo, &allocInfo, 0, outAlloc)
 }
 
+// CreateBufferWithAlignment creates a brand new core1_0.Buffer for the provided core1_0.BufferCreateInfo, allocates memory
+// to support it using the core1_0.BufferCreateInfo and AllocationCreateInfo, assigns the allocation to the provided
+// Allocation, and binds the Buffer to the Allocation.
+//
+// This method will return VKErrorExtensionNotPresent if the bufferInfo.Usage attempts to use Shader Device Address
+// but the khr_buffer_device_address extension is not available (and core 1.2 is not active). Validation errors
+// will return if any parameter is nil or if outAlloc already contains an active allocation. Other VKErrorUnknown
+// errors indicate an issue with the bufferInfo object, such as 0 size, a requested size that cannot fit within
+// this Allocation, or a minimum alignment that is not a power of 2. Other errors come from Vulkan.
+//
+// bufferInfo - A core1_0.BufferCreateInfo describing the Buffer to create
+//
+// allocInfo - Options indicating the sort of allocation being made
+//
+// minAlignment - The allocated memory will use this alignment if it is greater than the alignment
+// for the buffer's memory requirements
+//
+// outAlloc - A pointer to a valid Allocation that has not yet been allocated to (or has been recently freed). Passing
+// an Allocation object to this method will cause it to escape to the heap, but because freed allocations can
+// be reused, it is valid to get them from a sync.Pool
 func (a *Allocator) CreateBufferWithAlignment(bufferInfo core1_0.BufferCreateInfo, allocInfo AllocationCreateInfo, minAlignment int, outAlloc *Allocation) (core1_0.Buffer, common.VkResult, error) {
 	a.logger.Debug("Allocator::CreateBufferWithAlignment")
 
 	if outAlloc == nil {
 		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
+	} else if outAlloc.memory != nil {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
 	}
 
 	err := memutils.CheckPow2(minAlignment, "minAlignment")
@@ -1299,7 +1470,7 @@ func (a *Allocator) createBuffer(bufferInfo *core1_0.BufferCreateInfo, allocatio
 		nil,
 		&bufferOrImage,
 		allocationInfo,
-		metadata.SuballocationBuffer,
+		SuballocationBuffer,
 		outAllocSlice,
 	)
 	if err != nil {
@@ -1314,13 +1485,15 @@ func (a *Allocator) createBuffer(bufferInfo *core1_0.BufferCreateInfo, allocatio
 		}
 	}()
 
-	if allocationInfo.Flags&memutils.AllocationCreateDontBind == 0 {
+	if allocationInfo.Flags&AllocationCreateDontBind == 0 {
 		res, err = outAlloc.BindBufferMemory(buffer)
 	}
 
 	return buffer, res, err
 }
 
+// CalculateStatistics populates an AllocatorStatistics struct with the current state of this Allocator.
+// This method will return an error if the provided stats object is nil.
 func (a *Allocator) CalculateStatistics(stats *AllocatorStatistics) error {
 	if stats == nil {
 		return errors.New("attemped to calculate statistics and store to nil statistics object")
@@ -1374,6 +1547,11 @@ func (a *Allocator) calculatePoolStatistics(stats *AllocatorStatistics) {
 	}
 }
 
+// BuildStatsString will return a json string representing the full state of this Allocator for debugging
+// purposes.
+//
+// detailed - A boolean indicating how much data to provide. If false, basic statistical information will
+// be printed. If true, full information about all allocations will be printed.
 func (a *Allocator) BuildStatsString(detailed bool) string {
 	writer := jwriter.NewWriter()
 	objState := writer.Object()
@@ -1509,11 +1687,27 @@ func (a *Allocator) buildGeneralObj(objState *jwriter.ObjectState) {
 	generalObj.Name("memoryTypeCount").Int(a.deviceMemory.MemoryTypeCount())
 }
 
+// CreateImage creates a brand new core1_0.Image for the provided core1_0.ImageCreateInfo, allocates memory
+// to support it using the core1_0.ImageCreateInfo and AllocationCreateInfo, assigns the allocation to the provided
+// Allocation, and binds the Image to the Allocation.
+//
+// Validation errors will return if outALloc is nil or if outAlloc already contains an active allocation.
+// Other VKErrorUnknown errors indicate an issue with the imageInfo object, such as 0-sized dimensions
+//
+// imageInfo - A core1_0.ImageCreateInfo describing the Image to create
+//
+// allocInfo - Options indicating the sort of allocation being made
+//
+// outAlloc - A pointer to a valid Allocation that has not yet been allocated to (or has been recently freed). Passing
+// an Allocation object to this method will cause it to escape to the heap, but because freed allocations can
+// be reused, it is valid to get them from a sync.Pool
 func (a *Allocator) CreateImage(imageInfo core1_0.ImageCreateInfo, allocInfo AllocationCreateInfo, outAlloc *Allocation) (image core1_0.Image, res common.VkResult, err error) {
 	a.logger.Debug("Allocator::CreateImage")
 
 	if outAlloc == nil {
 		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
+	} else if outAlloc.memory != nil {
+		return nil, core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
 	}
 
 	if imageInfo.Extent.Width == 0 ||
@@ -1537,9 +1731,9 @@ func (a *Allocator) CreateImage(imageInfo core1_0.ImageCreateInfo, allocInfo All
 		}
 	}()
 
-	suballocation := metadata.SuballocationImageLinear
+	suballocation := SuballocationImageLinear
 	if imageInfo.Tiling == core1_0.ImageTilingOptimal {
-		suballocation = metadata.SuballocationImageOptimal
+		suballocation = SuballocationImageOptimal
 	}
 
 	var memReqs core1_0.MemoryRequirements
@@ -1575,7 +1769,7 @@ func (a *Allocator) CreateImage(imageInfo core1_0.ImageCreateInfo, allocInfo All
 		}
 	}()
 
-	if allocInfo.Flags&memutils.AllocationCreateDontBind == 0 {
+	if allocInfo.Flags&AllocationCreateDontBind == 0 {
 		res, err = outAlloc.BindImageMemory(image)
 	}
 

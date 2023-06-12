@@ -207,7 +207,7 @@ func BenchmarkMapAlloc(b *testing.B) {
 
 	_, err = allocator.AllocateMemory(&memReqs, AllocationCreateInfo{
 		Usage: MemoryUsageAuto,
-		Flags: memutils.AllocationCreateHostAccessRandom,
+		Flags: AllocationCreateHostAccessRandom,
 	}, &alloc)
 	require.NoError(b, err)
 
@@ -407,7 +407,7 @@ func BenchmarkAllocDedicated(b *testing.B) {
 		}
 
 		_, err = allocator.AllocateMemory(&memReqs, AllocationCreateInfo{
-			Flags: memutils.AllocationCreateDedicatedMemory,
+			Flags: AllocationCreateDedicatedMemory,
 		}, &alloc)
 		require.NoError(b, err)
 
@@ -460,8 +460,8 @@ func BenchmarkAllocDefragFast(b *testing.B) {
 		var finished bool
 
 		for !finished {
-			_ = defragContext.BeginAllocationPass()
-			finished, err = defragContext.EndAllocationPass()
+			_ = defragContext.BeginDefragPass()
+			finished, err = defragContext.EndDefragPass()
 			require.NoError(b, err)
 		}
 
@@ -521,69 +521,8 @@ func BenchmarkAllocDefragFull(b *testing.B) {
 		var finished bool
 
 		for !finished {
-			_ = defragContext.BeginAllocationPass()
-			finished, err = defragContext.EndAllocationPass()
-			require.NoError(b, err)
-		}
-
-		var stats defrag.DefragmentationStats
-		defragContext.Finish(&stats)
-		require.GreaterOrEqual(b, stats.AllocationsMoved, 2500)
-
-		b.StopTimer()
-		for allocIndex := 0; allocIndex < 5000; allocIndex++ {
-			err = allocs[allocIndex*2+1].Free()
-			require.NoError(b, err)
-		}
-	}
-	checkCorruption(b, allocator)
-}
-
-func BenchmarkAllocDefragExtensive(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragExtensive")
-	defer destroyApplication(b, instance, debugMessenger, device)
-
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
-
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
-	require.NoError(b, err)
-	defer func() {
-		require.NoError(b, allocator.Destroy())
-	}()
-
-	memReqs := core1_0.MemoryRequirements{
-		Size:           10000,
-		Alignment:      1,
-		MemoryTypeBits: 0xffffffff,
-	}
-
-	b.ResetTimer()
-	b.StopTimer()
-
-	for i := 0; i < b.N; i++ {
-		allocs := make([]Allocation, 10000)
-		_, err = allocator.AllocateMemorySlice(&memReqs, AllocationCreateInfo{}, allocs)
-		require.NoError(b, err)
-
-		for allocIndex := 0; allocIndex < 5000; allocIndex++ {
-			err = allocs[allocIndex*2].Free()
-			require.NoError(b, err)
-		}
-
-		b.StartTimer()
-
-		var defragContext DefragmentationContext
-		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
-			Flags:                 DefragmentationFlagAlgorithmExtensive,
-			MaxAllocationsPerPass: 50,
-		}, &defragContext)
-		require.NoError(b, err)
-
-		var finished bool
-
-		for !finished {
-			_ = defragContext.BeginAllocationPass()
-			finished, err = defragContext.EndAllocationPass()
+			_ = defragContext.BeginDefragPass()
+			finished, err = defragContext.EndDefragPass()
 			require.NoError(b, err)
 		}
 
@@ -643,8 +582,8 @@ func BenchmarkAllocDefragBig(b *testing.B) {
 		var finished bool
 
 		for !finished {
-			_ = defragContext.BeginAllocationPass()
-			finished, err = defragContext.EndAllocationPass()
+			_ = defragContext.BeginDefragPass()
+			finished, err = defragContext.EndDefragPass()
 			require.NoError(b, err)
 		}
 

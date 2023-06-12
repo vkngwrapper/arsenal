@@ -1,7 +1,6 @@
 package vam
 
 import (
-	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/core1_0"
 )
 
@@ -68,16 +67,37 @@ func (u MemoryUsage) String() string {
 	return str
 }
 
+// AllocationCreateInfo is an options struct that is used to define the specifics of a new allocation created
+// by Allocator.AllocateMemory, Allocator.AllocateMemorySlice, Allocator.AllocateMemoryForBuffer,
+// Allocator.AllocateMemoryForImage, etc.
 type AllocationCreateInfo struct {
-	Flags memutils.AllocationCreateFlags
+	// Flags is a memutils.AllocationCreateFlags value that describes the intended behavior of the
+	// created Allocation
+	Flags AllocationCreateFlags
+	// Usage indicates how the new allocation will be used, allowing vam to decide what memory
+	// type to use
 	Usage MemoryUsage
 
-	RequiredFlags  core1_0.MemoryPropertyFlags
+	// RequiredFlags indicates what flags must be on the memory type. If no type with these flags can be found with
+	// enough free memory, the allocation will fail
+	RequiredFlags core1_0.MemoryPropertyFlags
+	// PreferredFlags indicates a set of flags that should be on the memory type. Each specified flag are considered
+	// equally important: that is, if two flags are specified and no memory type contains both, an arbitrary memory
+	// type with one of the two will be chosen, if it exists.
 	PreferredFlags core1_0.MemoryPropertyFlags
 
+	// MemoryTypeBits is a bitmask of memory types that may be chosen for the requested allocation. If this is left
+	// 0, all memory types are permitted.
 	MemoryTypeBits uint32
-	Pool           *Pool
+	// Pool is the custom memory pool to allocate from. This is usually nil, in which case the memory will be
+	// allocated directly from the Allocator.
+	Pool *Pool
 
+	// UserData is an arbitrary value that will be applied to the Allocation. Allocation.UserData() will return
+	// this value after the allocation is complete. It's often helpful to place a resource object that ties the
+	// Allocation to a Buffer or Image here.
 	UserData interface{}
+	// Priority is the ext_memory_priority priority value applied to the allocated memory. This only has
+	// an effect for dedicated allocations, it is ignored for block allocations.
 	Priority float32
 }
