@@ -130,7 +130,7 @@ func BenchmarkCreateAllocation(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocation")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -160,7 +160,7 @@ func BenchmarkCreateAllocationSlice(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocationSlice")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -190,7 +190,7 @@ func BenchmarkMapAlloc(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkMapAlloc")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -237,7 +237,7 @@ func BenchmarkPoolAlloc(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkPoolAlloc")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -291,7 +291,7 @@ func BenchmarkAllocator_BuildStatsString(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkPoolAlloc")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -348,7 +348,7 @@ func BenchmarkPoolAllocSlice(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkPoolAllocSlice")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -390,7 +390,7 @@ func BenchmarkAllocDedicated(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDedicated")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -421,7 +421,7 @@ func BenchmarkAllocDefragFast(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragFast")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -482,7 +482,7 @@ func BenchmarkAllocDefragFull(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragFull")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -543,7 +543,7 @@ func BenchmarkAllocDefragBig(b *testing.B) {
 	instance, messenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragBig")
 	defer destroyApplication(b, instance, messenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -604,7 +604,7 @@ func BenchmarkBuffer(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkBuffer")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
@@ -633,7 +633,7 @@ func BenchmarkImage(b *testing.B) {
 	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkBuffer")
 	defer destroyApplication(b, instance, debugMessenger, device)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
 	require.NoError(b, err)
