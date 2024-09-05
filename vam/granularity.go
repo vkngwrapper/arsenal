@@ -76,19 +76,18 @@ func (g *BlockBufferImageGranularity) AllocationsConflict(
 }
 
 func (g *BlockBufferImageGranularity) RoundUpAllocRequest(allocType uint32, allocSize int, allocAlignment uint) (int, uint) {
-	suballocType := SuballocationType(allocType)
+	if g.bufferImageGranularity > 1 {
+		suballocType := SuballocationType(allocType)
+		imageRoundUp := g.bufferImageGranularity <= MaxLowBufferImageGranularity && suballocType == SuballocationImageOptimal
+		generalRoundUp := suballocType == SuballocationImageUnknown || suballocType == SuballocationUnknown
 
-	if g.bufferImageGranularity > 1 &&
-		g.bufferImageGranularity <= MaxLowBufferImageGranularity &&
-		(suballocType == SuballocationUnknown ||
-			suballocType == SuballocationImageUnknown ||
-			suballocType == SuballocationImageOptimal) {
+		if imageRoundUp || generalRoundUp {
+			if allocAlignment < g.bufferImageGranularity {
+				allocAlignment = g.bufferImageGranularity
+			}
 
-		if allocAlignment < g.bufferImageGranularity {
-			allocAlignment = g.bufferImageGranularity
+			allocSize = memutils.AlignUp(allocSize, g.bufferImageGranularity)
 		}
-
-		allocSize = memutils.AlignUp(allocSize, g.bufferImageGranularity)
 	}
 
 	return allocSize, allocAlignment
