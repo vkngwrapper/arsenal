@@ -39,7 +39,7 @@ func (a Algorithm) String() string {
 type DefragmentationStats struct {
 	// BytesMoved is the number of bytes that have been successfully relocated
 	BytesMoved int
-	// Bytesfreed is the number of bytes that have been freed: bear in mind that relocating an allocation doesn't necessarily
+	// BytesFreed is the number of bytes that have been freed: bear in mind that relocating an allocation doesn't necessarily
 	// free its memory- only if the defragmentation run completely frees up a block of memory and the
 	// BlockList chooses to free it will this value increase
 	BytesFreed int
@@ -50,64 +50,45 @@ type DefragmentationStats struct {
 	DeviceMemoryBlocksFreed int
 }
 
+func (s *DefragmentationStats) Add(stats DefragmentationStats) {
+	s.BytesMoved += stats.BytesMoved
+	s.BytesFreed += stats.BytesFreed
+	s.AllocationsMoved += stats.AllocationsMoved
+	s.DeviceMemoryBlocksFreed += stats.DeviceMemoryBlocksFreed
+}
+
 // MetadataDefragContext is the core of the defragmentation logic for memutils. One of these must be created
-// and initialized for each defragmentation run, which will then consist of multiple passses
+// and initialized for each defragmentation run, which will then consist of multiple passes
 type MetadataDefragContext[T any] struct {
-	// MaxPassBytes is the maximum number of bytes to relocate in each pass. There is no guarantee that
-	// this many bytes will actually be relocated in any given pass, based on how easy it is to find additional
-	// relocations to fit within the budget
-	MaxPassBytes int
-	// MaxPassAllocations is the maximum number of relocations to perform in each pass. There is no guarantee
-	// that this many allocations will actually be relocated in any givne pass, based on how easy it is to find
-	// additional relocations to fit within the budget. This value is a close proxy for the number of go allocations
-	// made for each pass, so managing this and MaxPassBytes can help you control memory and cpu throughput of the
-	// defragmentation process.
-	MaxPassAllocations int
 	// Algorithm is the defragmentation algorithm that should be used
 	Algorithm Algorithm
 	// Handler is a method that will be called to complete each relocation as part of BlockListCompletePass
 	Handler DefragmentOperationHandler[T]
+	// BlockList is the memory object this context exists to defragment
+	BlockList BlockList[T]
 
 	moves         []DefragmentationMove[T]
 	ignoredAllocs int
 
-	immovableBlockCount int
+	immovableBlockCount    int
+	smallestFailedRelocate int
 
-	globalStats  DefragmentationStats
-	passStats    DefragmentationStats
+	// scratchStats exists to avoid allocating statistics objects when passing them in to be populated
+	// because we pass them to an interface so the escape analyzer will get annoying about it
 	scratchStats memutils.Statistics
 }
 
 // Init sets up this MetadataDefragContext to be used in a fresh defragmentation run. MetadataDefragContext can
-// be reused for multiple runs, as long as this method is called prior to beginning the run
-//
-// blockListCount - the number of individual BlockList objects that are being defragmented by this process
-func (c *MetadataDefragContext[T]) Init(blockListCount int) {
-	if c.MaxPassBytes == 0 {
-		c.MaxPassBytes = math.MaxInt
-	}
-	if c.MaxPassAllocations == 0 {
-		c.MaxPassAllocations = math.MaxInt
+// be reused for multiple runs, as long as this method is called prior to beginning each run, including the first
+func (c *MetadataDefragContext[T]) Init() {
+	if c.BlockList == nil {
+		panic("attempted to init defragmentation context without a block list")
 	}
 
 	if c.Algorithm == 0 {
 		c.Algorithm = AlgorithmFull
 	}
-}
-
-// PopulateStats retrieves the DefragmentationStats representing defragmentation metrics for the entire current
-// run so far.
-//
-// stats - The DefragmentationStats object whose fields are being overwritten
-func (c *MetadataDefragContext[T]) PopulateStats(stats *DefragmentationStats) {
-	if stats == nil {
-		return
-	}
-
-	stats.DeviceMemoryBlocksFreed = c.globalStats.DeviceMemoryBlocksFreed
-	stats.BytesFreed = c.globalStats.BytesFreed
-	stats.BytesMoved = c.globalStats.BytesMoved
-	stats.AllocationsMoved = c.globalStats.AllocationsMoved
+	c.smallestFailedRelocate = math.MaxInt
 }
 
 // BlockListCompletePass should be called after a defragmentation pass has been worked: BlockListCollectMoves
@@ -122,8 +103,8 @@ func (c *MetadataDefragContext[T]) PopulateStats(stats *DefragmentationStats) {
 // stateIndex - the index of blockList within the list of all blockLists being defragmented
 //
 // blockList - The memory pool to complete defragmentation of
-func (c *MetadataDefragContext[T]) BlockListCompletePass(stateIndex int, blockList BlockList[T]) (bool, error) {
-	immovableBlocks := make(map[metadata.BlockMetadata]struct{}, blockList.BlockCount())
+func (c *MetadataDefragContext[T]) BlockListCompletePass(pass *PassContext) error {
+	immovableBlocks := make(map[metadata.BlockMetadata]struct{}, c.BlockList.BlockCount()-c.immovableBlockCount)
 
 	var allErrors []error
 
@@ -131,7 +112,7 @@ func (c *MetadataDefragContext[T]) BlockListCompletePass(stateIndex int, blockLi
 		move := c.moves[i]
 
 		c.scratchStats = memutils.Statistics{}
-		blockList.AddStatistics(&c.scratchStats)
+		c.BlockList.AddStatistics(&c.scratchStats)
 		prevCount := c.scratchStats.BlockCount
 		prevBytes := c.scratchStats.BlockBytes
 
@@ -142,61 +123,50 @@ func (c *MetadataDefragContext[T]) BlockListCompletePass(stateIndex int, blockLi
 		}
 
 		c.scratchStats = memutils.Statistics{}
-		blockList.AddStatistics(&c.scratchStats)
-		c.passStats.DeviceMemoryBlocksFreed += prevCount - c.scratchStats.BlockCount
-		c.passStats.BytesFreed += prevBytes - c.scratchStats.BlockBytes
+		c.BlockList.AddStatistics(&c.scratchStats)
+		pass.Stats.DeviceMemoryBlocksFreed += prevCount - c.scratchStats.BlockCount
+		pass.Stats.BytesFreed += prevBytes - c.scratchStats.BlockBytes
 
 		switch move.MoveOperation {
 		case DefragmentationMoveIgnore:
-			c.passStats.BytesMoved -= move.Size
-			c.passStats.AllocationsMoved--
+			pass.Stats.BytesMoved -= move.Size
+			pass.Stats.AllocationsMoved--
 			immovableBlocks[move.SrcBlockMetadata] = struct{}{}
 
 		case DefragmentationMoveDestroy:
-			c.passStats.BytesMoved -= move.Size
-			c.passStats.AllocationsMoved--
+			pass.Stats.BytesMoved -= move.Size
+			pass.Stats.AllocationsMoved--
 		}
 	}
 
-	c.globalStats.AllocationsMoved += c.passStats.AllocationsMoved
-	c.globalStats.BytesFreed += c.passStats.BytesFreed
-	c.globalStats.BytesMoved += c.passStats.BytesMoved
-	c.globalStats.DeviceMemoryBlocksFreed += c.passStats.DeviceMemoryBlocksFreed
-	c.passStats = DefragmentationStats{}
-
-	// Move blocks iwth immovable allocations according to algorithm
-	swappedFreeBlocks := false
+	// Move blocks with immovable allocations according to algorithm
 	if len(immovableBlocks) > 0 {
-		if !swappedFreeBlocks {
-			// Move to the beginning
-			for blockMetadata := range immovableBlocks {
-				c.swapImmovableBlocks(blockList, blockMetadata)
-			}
+		// Move to the beginning
+		for block := range immovableBlocks {
+			c.swapImmovableBlocks(block)
 		}
 	}
 
-	var outError error
+	c.moves = c.moves[:0]
+
 	if len(allErrors) == 1 {
-		outError = allErrors[0]
-	} else if len(allErrors) > 0 {
-		outError = errors.Join(allErrors...)
+		return allErrors[0]
 	}
 
-	if len(c.moves) > 0 || swappedFreeBlocks || outError != nil {
-		c.moves = c.moves[:0]
-		return false, outError
+	if len(allErrors) > 0 {
+		return errors.Join(allErrors...)
 	}
 
-	return true, nil
+	return nil
 }
 
-func (c *MetadataDefragContext[T]) swapImmovableBlocks(blockList BlockList[T], mtdata metadata.BlockMetadata) {
-	blockList.Lock()
-	defer blockList.Unlock()
+func (c *MetadataDefragContext[T]) swapImmovableBlocks(mtdata metadata.BlockMetadata) {
+	c.BlockList.Lock()
+	defer c.BlockList.Unlock()
 
-	for i := c.immovableBlockCount; i < blockList.BlockCount(); i++ {
-		if blockList.MetadataForBlock(i) == mtdata {
-			blockList.SwapBlocks(i, c.immovableBlockCount)
+	for i := c.immovableBlockCount; i < c.BlockList.BlockCount(); i++ {
+		if c.BlockList.MetadataForBlock(i) == mtdata {
+			c.BlockList.SwapBlocks(i, c.immovableBlockCount)
 			c.immovableBlockCount++
 		}
 	}
@@ -208,19 +178,24 @@ func (c *MetadataDefragContext[T]) swapImmovableBlocks(blockList BlockList[T], m
 // stateIndex - the index of blockList within the larger set of BlockList objects being defragmented in this run
 //
 // blockList - the memory pool to collect relocation operations for
-func (c *MetadataDefragContext[T]) BlockListCollectMoves(stateIndex int, blockList BlockList[T]) {
-	if blockList == nil {
-		panic("attempted to begin pass with a nil blockList")
+func (c *MetadataDefragContext[T]) BlockListCollectMoves(pass *PassContext) bool {
+	c.BlockList.Lock()
+	defer c.BlockList.Unlock()
+
+	if c.BlockList.BlockCount() > 1 {
+		switch c.Algorithm {
+		case AlgorithmFast:
+			return c.walkSuballocations(pass, c.defragFastSuballocHandler)
+		case AlgorithmFull:
+			return c.walkSuballocations(pass, c.defragFullSuballocHandler)
+		default:
+			panic(fmt.Sprintf("attempted to defragment with unknown algorithm: %s", c.Algorithm.String()))
+		}
+	} else if c.BlockList.BlockCount() == 1 && c.Algorithm != AlgorithmFast {
+		return c.walkSuballocations(pass, c.reallocSuballocHandler)
 	}
 
-	blockList.Lock()
-	defer blockList.Unlock()
-
-	if blockList.BlockCount() > 1 {
-		c.computeDefragmentation(blockList, stateIndex)
-	} else if blockList.BlockCount() == 1 {
-		c.reallocWithinBlock(blockList, 0, blockList.MetadataForBlock(0))
-	}
+	return false
 }
 
 // Moves returns the list of relocation operations most recently collected with BlockListCollectMoves
@@ -264,7 +239,7 @@ func (c *MetadataDefragContext[T]) mustFindOffset(mtdata metadata.BlockMetadata,
 	return offset
 }
 
-func (c *MetadataDefragContext[T]) getMoveData(blockList BlockList[T], handle metadata.BlockAllocationHandle, mtdata metadata.BlockMetadata) (MoveAllocationData[T], bool) {
+func (c *MetadataDefragContext[T]) getMoveData(handle metadata.BlockAllocationHandle, mtdata metadata.BlockMetadata) (MoveAllocationData[T], bool) {
 	userData, err := mtdata.AllocationUserData(handle)
 	if err != nil {
 		panic(fmt.Sprintf("unexpected error when retrieving allocation user data: %+v", err))
@@ -274,44 +249,10 @@ func (c *MetadataDefragContext[T]) getMoveData(blockList BlockList[T], handle me
 		return MoveAllocationData[T]{}, true
 	}
 
-	return blockList.MoveDataForUserData(userData), false
+	return c.BlockList.MoveDataForUserData(userData), false
 }
 
-const defragMaxAllocsToIgnore = 16
-
-func (c *MetadataDefragContext[T]) checkCounters(bytes int) defragCounterStatus {
-	// Ignore allocation if it will exceed max size for copy
-	if c.passStats.BytesMoved+bytes > c.MaxPassBytes {
-		c.ignoredAllocs++
-		if c.ignoredAllocs < defragMaxAllocsToIgnore {
-			return defragCounterIgnore
-		} else {
-			return defragCounterEnd
-		}
-	} else {
-		c.ignoredAllocs = 0
-	}
-
-	return defragCounterPass
-}
-
-func (c *MetadataDefragContext[T]) incrementCounters(bytes int) bool {
-	c.passStats.BytesMoved += bytes
-	c.passStats.AllocationsMoved++
-
-	// Early return when max found
-	if c.passStats.AllocationsMoved >= c.MaxPassAllocations || c.passStats.BytesMoved >= c.MaxPassBytes {
-		if c.passStats.AllocationsMoved != c.MaxPassAllocations && c.passStats.BytesMoved != c.MaxPassBytes {
-			panic(fmt.Sprintf("somehow passed maximum pass thresholds: bytes %d, allocs %d", c.passStats.BytesMoved, c.passStats.AllocationsMoved))
-		}
-
-		return true
-	}
-
-	return false
-}
-
-func (c *MetadataDefragContext[T]) allocFromBlock(blockList BlockList[T], blockIndex int, mtData metadata.BlockMetadata, size int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *T) (common.VkResult, error) {
+func (c *MetadataDefragContext[T]) allocFromBlock(blockIndex int, mtData metadata.BlockMetadata, size int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *T) (common.VkResult, error) {
 	success, currRequest, err := mtData.CreateAllocationRequest(size, alignment, false, suballocType, 0)
 	if err != nil {
 		return core1_0.VKErrorUnknown, err
@@ -319,15 +260,15 @@ func (c *MetadataDefragContext[T]) allocFromBlock(blockList BlockList[T], blockI
 		return core1_0.VKErrorOutOfDeviceMemory, nil
 	}
 
-	return blockList.CommitDefragAllocationRequest(currRequest, blockIndex, alignment, flags, userData, suballocType, outAlloc)
+	return c.BlockList.CommitDefragAllocationRequest(currRequest, blockIndex, alignment, flags, userData, suballocType, outAlloc)
 }
 
-func (c *MetadataDefragContext[T]) allocInOtherBlock(start, end int, data *MoveAllocationData[T], blockList BlockList[T]) bool {
+func (c *MetadataDefragContext[T]) allocInOtherBlock(start, end int, data *MoveAllocationData[T]) bool {
 	for ; start < end; start++ {
-		dstMetadata := blockList.MetadataForBlock(start)
+		dstMetadata := c.BlockList.MetadataForBlock(start)
 		if dstMetadata.SumFreeSize() >= data.Move.Size {
-			data.Move.DstTmpAllocation = blockList.CreateAlloc()
-			res, err := c.allocFromBlock(blockList, start, dstMetadata,
+			data.Move.DstTmpAllocation = c.BlockList.CreateAlloc()
+			res, err := c.allocFromBlock(start, dstMetadata,
 				data.Move.Size,
 				data.Alignment,
 				data.Flags,
@@ -339,10 +280,7 @@ func (c *MetadataDefragContext[T]) allocInOtherBlock(start, end int, data *MoveA
 			} else if res == core1_0.VKSuccess {
 				data.Move.DstBlockMetadata = dstMetadata
 				c.moves = append(c.moves, data.Move)
-				if c.incrementCounters(data.Move.Size) {
-					return true
-				}
-				break
+				return true
 			}
 		}
 	}
@@ -350,35 +288,41 @@ func (c *MetadataDefragContext[T]) allocInOtherBlock(start, end int, data *MoveA
 	return false
 }
 
-func (c *MetadataDefragContext[T]) walkSuballocations(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata,
-	suballocHandler func(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool) bool {
-	for handle := c.mustBeginAllocationList(mtdata); handle != metadata.NoAllocation; handle = c.mustFindNextAllocation(mtdata, handle) {
-		moveData, immobile := c.getMoveData(blockList, handle, mtdata)
-		if immobile {
-			continue
-		}
+type walkHandler[T any] func(pass *PassContext, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool
 
-		counter := c.checkCounters(moveData.Move.Size)
-		switch counter {
-		case defragCounterIgnore:
-			continue
-		case defragCounterEnd:
-			return true
-		case defragCounterPass:
-			break
-		default:
-			panic(fmt.Sprintf("unexpected defrag counter status: %s", counter.String()))
-		}
+func (c *MetadataDefragContext[T]) walkSuballocations(pass *PassContext, suballocHandler walkHandler[T]) bool {
+	// Go through allocation in last blocks and try to fit them inside first ones
+	for blockIndex := c.BlockList.BlockCount() - 1; blockIndex > c.immovableBlockCount; blockIndex-- {
+		mtdata := c.BlockList.MetadataForBlock(blockIndex)
 
-		if suballocHandler(blockList, blockIndex, mtdata, handle, moveData) {
-			return true
+		for handle := c.mustBeginAllocationList(mtdata); handle != metadata.NoAllocation; handle = c.mustFindNextAllocation(mtdata, handle) {
+			moveData, immobile := c.getMoveData(handle, mtdata)
+			if immobile {
+				continue
+			}
+
+			counter := pass.checkCounters(moveData.Move.Size)
+			switch counter {
+			case defragCounterIgnore:
+				continue
+			case defragCounterEnd:
+				return true
+			case defragCounterPass:
+				break
+			default:
+				panic(fmt.Sprintf("unexpected defrag counter status: %s", counter.String()))
+			}
+
+			if suballocHandler(pass, blockIndex, mtdata, handle, moveData) {
+				return true
+			}
 		}
 	}
 
 	return false
 }
 
-func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
+func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {
 	success, allocRequest, err := mtdata.CreateAllocationRequest(
 		moveData.Move.Size,
 		moveData.Alignment,
@@ -391,8 +335,8 @@ func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockList Bloc
 	}
 
 	if success && c.mustFindOffset(mtdata, allocRequest.BlockAllocationHandle) < offset {
-		moveData.Move.DstTmpAllocation = blockList.CreateAlloc()
-		res, err := blockList.CommitDefragAllocationRequest(
+		moveData.Move.DstTmpAllocation = c.BlockList.CreateAlloc()
+		res, err := c.BlockList.CommitDefragAllocationRequest(
 			allocRequest,
 			blockIndex,
 			moveData.Alignment,
@@ -404,9 +348,7 @@ func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockList Bloc
 		if err == nil {
 			moveData.Move.DstBlockMetadata = mtdata
 			c.moves = append(c.moves, moveData.Move)
-			if c.incrementCounters(moveData.Move.Size) {
-				return true
-			}
+			return true
 		} else if res == core1_0.VKErrorUnknown {
 			panic(fmt.Sprintf("unexpected error when commiting allocation request for defragment: %+v", err))
 		}
@@ -415,54 +357,44 @@ func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockList Bloc
 	return false
 }
 
-func (c *MetadataDefragContext[T]) reallocSuballocHandler(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool {
+func (c *MetadataDefragContext[T]) reallocSuballocHandler(pass *PassContext, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool {
 	offset := c.mustFindOffset(mtdata, handle)
 	if offset != 0 && mtdata.SumFreeSize() >= moveData.Move.Size {
-		return c.allocIfLowerOffset(offset, blockList, blockIndex, mtdata, handle, &moveData)
-	}
-
-	return false
-}
-
-func (c *MetadataDefragContext[T]) reallocWithinBlock(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata) bool {
-	return c.walkSuballocations(blockList, blockIndex, mtdata, c.reallocSuballocHandler)
-}
-
-func (c *MetadataDefragContext[T]) computeDefragmentation(blockList BlockList[T], stateIndex int) bool {
-	switch c.Algorithm {
-	case AlgorithmFast:
-		return c.computeDefragmentationFast(blockList)
-	case AlgorithmFull:
-		return c.computeDefragmentationFull(blockList)
-	default:
-		panic(fmt.Sprintf("attempted to defragment with unknown algorithm: %s", c.Algorithm.String()))
-	}
-}
-
-func (c *MetadataDefragContext[T]) defragFastSuballocHandler(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool {
-	return c.allocInOtherBlock(0, blockIndex, &moveData, blockList)
-}
-
-func (c *MetadataDefragContext[T]) computeDefragmentationFast(blockList BlockList[T]) bool {
-	// Move only between blocks
-
-	// Go through allocation in last blocks and try to fit them inside first ones
-	for i := blockList.BlockCount() - 1; i > c.immovableBlockCount; i-- {
-		mtdata := blockList.MetadataForBlock(i)
-
-		if c.walkSuballocations(blockList, i, mtdata, c.defragFastSuballocHandler) {
-			return true
+		if c.allocIfLowerOffset(offset, blockIndex, mtdata, handle, &moveData) {
+			return pass.incrementCounters(moveData.Move.Size)
 		}
 	}
 
 	return false
 }
 
-func (c *MetadataDefragContext[T]) defragFullSuballocHandler(blockList BlockList[T], blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool {
+func (c *MetadataDefragContext[T]) defragFastSuballocHandler(pass *PassContext, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool {
+	if blockIndex == 0 {
+		return true
+	}
+
+	if moveData.Move.Size >= c.smallestFailedRelocate {
+		return false
+	}
+
+	success := c.allocInOtherBlock(0, blockIndex, &moveData)
+	if !success {
+		if moveData.Move.Size < c.smallestFailedRelocate {
+			c.smallestFailedRelocate = moveData.Move.Size
+		}
+
+		return false
+	}
+
+	// Have we crossed our threshold for this pass?
+	return pass.incrementCounters(moveData.Move.Size)
+}
+
+func (c *MetadataDefragContext[T]) defragFullSuballocHandler(pass *PassContext, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool {
 	// Check all previous blocks for free space
 	prevMoveCount := len(c.moves)
-	if c.allocInOtherBlock(0, blockIndex, &moveData, blockList) {
-		return true
+	if c.allocInOtherBlock(0, blockIndex, &moveData) {
+		return pass.incrementCounters(moveData.Move.Size)
 	}
 
 	// If no room found then realloc within block for lower offset
@@ -471,23 +403,8 @@ func (c *MetadataDefragContext[T]) defragFullSuballocHandler(blockList BlockList
 		offset != 0 &&
 		mtdata.SumFreeSize() >= moveData.Move.Size {
 
-		if c.allocIfLowerOffset(offset, blockList, blockIndex, mtdata, handle, &moveData) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (c *MetadataDefragContext[T]) computeDefragmentationFull(blockList BlockList[T]) bool {
-	// Go over every allocation and try to fit it in previous blocks at lowest offsets,
-	// if not possible: realloc within single block to minimize offset (exclude offset == 0)
-
-	for i := blockList.BlockCount() - 1; i > c.immovableBlockCount; i-- {
-		mtdata := blockList.MetadataForBlock(i)
-
-		if c.walkSuballocations(blockList, i, mtdata, c.defragFullSuballocHandler) {
-			return true
+		if c.allocIfLowerOffset(offset, blockIndex, mtdata, handle, &moveData) {
+			return pass.incrementCounters(moveData.Move.Size)
 		}
 	}
 

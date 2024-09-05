@@ -462,12 +462,15 @@ func BenchmarkAllocDefragFast(b *testing.B) {
 		for !finished {
 			_ = defragContext.BeginDefragPass()
 			finished, err = defragContext.EndDefragPass()
-			require.NoError(b, err)
+			if err != nil {
+				break
+			}
 		}
+		require.NoError(b, err)
 
 		var stats defrag.DefragmentationStats
 		defragContext.Finish(&stats)
-		require.GreaterOrEqual(b, stats.AllocationsMoved, 1000)
+		require.GreaterOrEqual(b, stats.AllocationsMoved, 1600)
 
 		b.StopTimer()
 		for allocIndex := 0; allocIndex < 5000; allocIndex++ {

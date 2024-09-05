@@ -1,11 +1,11 @@
 package vam
 
 import (
-	"errors"
 	"fmt"
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
 	"github.com/vkngwrapper/core/v2/common"
 	"golang.org/x/exp/slog"
+	"math"
 	"sync"
 	"unsafe"
 )
@@ -83,50 +83,75 @@ func init() {
 // is populated by Allocator.BeginDefragmentation. DefragmentationContext objects can be reused for multiple defragmentation
 // runs in order to reduce allocations, if desired.
 type DefragmentationContext struct {
-	context defrag.MetadataDefragContext[Allocation]
+	MaxPassBytes       int
+	MaxPassAllocations int
 
-	logger                    *slog.Logger
-	poolMemoryBlockList       *memoryBlockList
-	allocatorMemoryBlockLists [common.MaxMemoryTypes]*memoryBlockList
+	context           []defrag.MetadataDefragContext[Allocation]
+	logger            *slog.Logger
+	blockListProgress int
+	pass              defrag.PassContext
+	stats             defrag.DefragmentationStats
 }
 
-func (c *DefragmentationContext) init(blockListCount int, o *DefragmentationInfo) {
-	c.context.MaxPassBytes = o.MaxBytesPerPass
-	c.context.MaxPassAllocations = o.MaxAllocationsPerPass
-	c.context.Handler = c.completePassForMove
+func (c *DefragmentationContext) init(o *DefragmentationInfo) {
+	c.MaxPassBytes = o.MaxBytesPerPass
+	c.MaxPassAllocations = o.MaxAllocationsPerPass
 
-	algorithm := o.Flags & DefragmentationFlagAlgorithmMask
-	switch algorithm {
-	case DefragmentationFlagAlgorithmFast:
-		c.context.Algorithm = defrag.AlgorithmFast
-	case DefragmentationFlagAlgorithmFull:
-		c.context.Algorithm = defrag.AlgorithmFull
-	default:
-		panic(fmt.Sprintf("unknown defragmentation algorithm: %s", algorithm.String()))
+	if c.MaxPassBytes == 0 {
+		c.MaxPassBytes = math.MaxInt
 	}
 
-	c.context.Init(blockListCount)
+	if c.MaxPassAllocations == 0 {
+		c.MaxPassAllocations = math.MaxInt
+	}
+
+	algorithm := o.Flags & DefragmentationFlagAlgorithmMask
+
+	for index := range c.context {
+		if c.context[index].BlockList == nil {
+			continue
+		}
+
+		c.context[index].Handler = c.completePassForMove
+
+		switch algorithm {
+		case DefragmentationFlagAlgorithmFast:
+			c.context[index].Algorithm = defrag.AlgorithmFast
+		case DefragmentationFlagAlgorithmFull:
+			c.context[index].Algorithm = defrag.AlgorithmFull
+		default:
+			panic(fmt.Sprintf("unknown defragmentation algorithm: %s", algorithm.String()))
+		}
+
+		c.context[index].Init()
+	}
 }
 
 func (c *DefragmentationContext) initForPool(pool *Pool, o *DefragmentationInfo) {
-	c.init(1, o)
-	c.poolMemoryBlockList = &pool.blockList
+	c.context = []defrag.MetadataDefragContext[Allocation]{
+		{
+			BlockList: &pool.blockList,
+		},
+	}
 	c.logger = pool.logger
 	pool.blockList.incrementalSort = false
 	pool.blockList.SortByFreeSize()
+	c.init(o)
 }
 
 func (c *DefragmentationContext) initForAllocator(allocator *Allocator, o *DefragmentationInfo) {
-	c.init(common.MaxMemoryTypes, o)
-	c.allocatorMemoryBlockLists = allocator.memoryBlockLists
+	c.context = make([]defrag.MetadataDefragContext[Allocation], common.MaxMemoryTypes)
 	c.logger = allocator.logger
 
-	for i := 0; i < common.MaxMemoryTypes; i++ {
-		if c.allocatorMemoryBlockLists[i] != nil {
-			c.allocatorMemoryBlockLists[i].incrementalSort = false
-			c.allocatorMemoryBlockLists[i].SortByFreeSize()
+	for index := range c.context {
+		if allocator.memoryBlockLists[index] != nil {
+			c.context[index].BlockList = allocator.memoryBlockLists[index]
+			allocator.memoryBlockLists[index].incrementalSort = false
+			allocator.memoryBlockLists[index].SortByFreeSize()
 		}
 	}
+
+	c.init(o)
 }
 
 // BeginDefragPass collects a number of relocations to be performed for a single pass of the defragmentation
@@ -144,17 +169,29 @@ func (c *DefragmentationContext) initForAllocator(allocator *Allocator, o *Defra
 func (c *DefragmentationContext) BeginDefragPass() []defrag.DefragmentationMove[Allocation] {
 	c.logger.Debug("DefragmentationContext::BeginDefragPass")
 
-	if c.poolMemoryBlockList != nil {
-		c.context.BlockListCollectMoves(0, c.poolMemoryBlockList)
-	} else {
-		for i := 0; i < common.MaxMemoryTypes; i++ {
-			if c.allocatorMemoryBlockLists[i] != nil {
-				c.context.BlockListCollectMoves(i, c.allocatorMemoryBlockLists[i])
-			}
+	c.pass = defrag.PassContext{
+		MaxPassBytes:       c.MaxPassBytes,
+		MaxPassAllocations: c.MaxPassAllocations,
+	}
+
+	var moves []defrag.DefragmentationMove[Allocation]
+
+	for ; c.blockListProgress < len(c.context); c.blockListProgress++ {
+		if c.context[c.blockListProgress].BlockList == nil {
+			continue
+		}
+
+		if c.context[c.blockListProgress].BlockListCollectMoves(&c.pass) {
+			break
+		}
+
+		moves = c.context[c.blockListProgress].Moves()
+
+		if len(moves) > 0 {
+			break
 		}
 	}
 
-	moves := c.context.Moves()
 	var wg sync.WaitGroup
 	for _, move := range moves {
 		// Waiting on several goroutines that will live like 100ns is slow, so only do this async if
@@ -181,34 +218,18 @@ func (c *DefragmentationContext) BeginDefragPass() []defrag.DefragmentationMove[
 func (c *DefragmentationContext) EndDefragPass() (bool, error) {
 	c.logger.Debug("DefragmentationContext::EndDefragPass")
 
-	done := true
-
-	var err error
-	var allErrors []error
-	if c.poolMemoryBlockList != nil {
-		done, err = c.context.BlockListCompletePass(0, c.poolMemoryBlockList)
-		if err != nil {
-			allErrors = append(allErrors, err)
-		}
-	} else {
-		for i := 0; i < common.MaxMemoryTypes; i++ {
-			if c.allocatorMemoryBlockLists[i] != nil {
-				thisOneDone, err := c.context.BlockListCompletePass(i, c.allocatorMemoryBlockLists[i])
-				if err != nil {
-					allErrors = append(allErrors, err)
-				}
-				done = done && thisOneDone
-			}
-		}
+	if c.blockListProgress >= len(c.context) {
+		return true, nil
 	}
 
-	if len(allErrors) == 1 {
-		err = allErrors[0]
-	} else if len(allErrors) > 0 {
-		err = errors.Join(allErrors...)
+	if len(c.context[c.blockListProgress].Moves()) == 0 {
+		return true, nil
 	}
 
-	return done, err
+	err := c.context[c.blockListProgress].BlockListCompletePass(&c.pass)
+	c.stats.Add(c.pass.Stats)
+
+	return false, err
 }
 
 // Finish performs some vital cleanup duties after the last defragmentation pass has run. This
@@ -217,16 +238,13 @@ func (c *DefragmentationContext) Finish(outStats *defrag.DefragmentationStats) {
 	c.logger.Debug("DefragmentationContext::Finish")
 
 	if outStats != nil {
-		c.context.PopulateStats(outStats)
+		*outStats = c.stats
 	}
 
-	if c.poolMemoryBlockList != nil {
-		c.poolMemoryBlockList.incrementalSort = true
-	} else {
-		for i := 0; i < common.MaxMemoryTypes; i++ {
-			if c.allocatorMemoryBlockLists[i] != nil {
-				c.allocatorMemoryBlockLists[i].incrementalSort = true
-			}
+	for index := range c.context {
+		if c.context[index].BlockList != nil {
+			blockList := c.context[index].BlockList.(*memoryBlockList)
+			blockList.incrementalSort = true
 		}
 	}
 }
