@@ -7,6 +7,7 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
+	"math"
 )
 
 // Algorithm identifies which defragmentation algorithm will be used for defrag passes
@@ -250,7 +251,7 @@ func (c *MetadataDefragContext[T]) getMoveData(handle metadata.BlockAllocationHa
 }
 
 func (c *MetadataDefragContext[T]) allocFromBlock(blockIndex int, mtData metadata.BlockMetadata, size int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *T) (common.VkResult, error) {
-	success, currRequest, err := mtData.CreateAllocationRequest(size, alignment, false, suballocType, 0)
+	success, currRequest, err := mtData.CreateAllocationRequest(size, alignment, false, suballocType, 0, math.MaxInt)
 	if err != nil {
 		return core1_0.VKErrorUnknown, err
 	} else if !success {
@@ -326,6 +327,7 @@ func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockIndex int
 		false,
 		moveData.SuballocationType,
 		metadata.AllocationStrategyMinOffset,
+		offset,
 	)
 	if err != nil {
 		panic(fmt.Sprintf("unexpected error when populating allocation request for defrag: %+v", err))

@@ -16,6 +16,7 @@ import (
 	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
 	"golang.org/x/exp/slog"
+	"math"
 	"sort"
 	"strconv"
 	"sync"
@@ -627,7 +628,7 @@ func (l *memoryBlockList) allocFromBlock(block *deviceMemoryBlock, size int, ali
 		strategy |= metadata.AllocationStrategyMinTime
 	}
 
-	success, currRequest, err := block.metadata.CreateAllocationRequest(size, alignment, isUpperAddress, uint32(suballocType), strategy)
+	success, currRequest, err := block.metadata.CreateAllocationRequest(size, alignment, isUpperAddress, uint32(suballocType), strategy, math.MaxInt)
 	if err != nil {
 		return core1_0.VKErrorUnknown, err
 	} else if !success {

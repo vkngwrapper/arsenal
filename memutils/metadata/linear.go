@@ -412,6 +412,7 @@ func (m *LinearBlockMetadata) CreateAllocationRequest(
 	upperAddress bool,
 	allocType uint32,
 	strategy AllocationStrategy,
+	maxOffset int,
 ) (bool, AllocationRequest, error) {
 	if allocSize <= 0 {
 		return false, AllocationRequest{}, errors.New("allocation size must be greater than 0")

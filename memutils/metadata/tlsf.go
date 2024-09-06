@@ -347,6 +347,7 @@ func (m *TLSFBlockMetadata) CreateAllocationRequest(
 	upperAddress bool,
 	allocType uint32,
 	strategy AllocationStrategy,
+	maxOffset int,
 ) (bool, AllocationRequest, error) {
 	var allocRequest AllocationRequest
 
@@ -461,7 +462,7 @@ func (m *TLSFBlockMetadata) CreateAllocationRequest(
 		// In VMA, it just makes a vector of block pointers and populates it by enumerating backward
 		// through the list and then searches forward through the vector. In Go, in order to avoid
 		// allocating a slice, we do it recursively.
-		foundBlock := m.minOffsetCheckBlocks(allocSize, allocAlignment, allocType, &allocRequest)
+		foundBlock := m.minOffsetCheckBlocks(allocSize, allocAlignment, allocType, &allocRequest, maxOffset)
 		if foundBlock {
 			return foundBlock, allocRequest, nil
 		}
@@ -533,9 +534,14 @@ func (m *TLSFBlockMetadata) minOffsetCheckBlocks(
 	allocAlignment uint,
 	allocType uint32,
 	allocRequest *AllocationRequest,
+	maxOffset int,
 ) bool {
 
 	for block := m.tailBlock; block != nil; block = block.nextPhysical {
+		if block.offset >= maxOffset {
+			break
+		}
+
 		if block.IsFree() && block.size >= allocSize && block != m.nullBlock {
 			if m.checkBlock(block, m.getListIndexFromSize(block.size), allocSize, allocAlignment, allocType, allocRequest) {
 				return true

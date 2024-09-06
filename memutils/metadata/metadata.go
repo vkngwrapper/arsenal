@@ -43,6 +43,7 @@ type BlockMetadata interface {
 		upperAddress bool,
 		allocType uint32,
 		strategy AllocationStrategy,
+		maxOffset int,
 	) (bool, AllocationRequest, error)
 	Alloc(request AllocationRequest, allocType uint32, userData any) error
 
