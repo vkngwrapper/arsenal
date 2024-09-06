@@ -67,6 +67,8 @@ func (m *LinearBlockMetadata) IsEmpty() bool {
 	return m.AllocationCount() == 0
 }
 
+func (m *LinearBlockMetadata) SupportsRandomAccess() bool { return false }
+
 func (m *LinearBlockMetadata) AllocationOffset(allocHandle BlockAllocationHandle) (int, error) {
 	return int(allocHandle) - 1, nil
 }

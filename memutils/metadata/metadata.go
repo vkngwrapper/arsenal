@@ -12,6 +12,7 @@ import (
 type BlockMetadata interface {
 	Init(size int)
 	Size() int
+	SupportsRandomAccess() bool
 
 	Validate() error
 	AllocationCount() int

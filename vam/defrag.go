@@ -93,7 +93,7 @@ type DefragmentationContext struct {
 	stats             defrag.DefragmentationStats
 }
 
-func (c *DefragmentationContext) init(o *DefragmentationInfo) {
+func (c *DefragmentationContext) init(o *DefragmentationInfo) error {
 	c.MaxPassBytes = o.MaxBytesPerPass
 	c.MaxPassAllocations = o.MaxAllocationsPerPass
 
@@ -123,11 +123,16 @@ func (c *DefragmentationContext) init(o *DefragmentationInfo) {
 			panic(fmt.Sprintf("unknown defragmentation algorithm: %s", algorithm.String()))
 		}
 
-		c.context[index].Init()
+		err := c.context[index].Init()
+		if err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
-func (c *DefragmentationContext) initForPool(pool *Pool, o *DefragmentationInfo) {
+func (c *DefragmentationContext) initForPool(pool *Pool, o *DefragmentationInfo) error {
 	c.context = []defrag.MetadataDefragContext[Allocation]{
 		{
 			BlockList: &pool.blockList,
@@ -136,10 +141,10 @@ func (c *DefragmentationContext) initForPool(pool *Pool, o *DefragmentationInfo)
 	c.logger = pool.logger
 	pool.blockList.incrementalSort = false
 	pool.blockList.SortByFreeSize()
-	c.init(o)
+	return c.init(o)
 }
 
-func (c *DefragmentationContext) initForAllocator(allocator *Allocator, o *DefragmentationInfo) {
+func (c *DefragmentationContext) initForAllocator(allocator *Allocator, o *DefragmentationInfo) error {
 	c.context = make([]defrag.MetadataDefragContext[Allocation], common.MaxMemoryTypes)
 	c.logger = allocator.logger
 
@@ -151,7 +156,7 @@ func (c *DefragmentationContext) initForAllocator(allocator *Allocator, o *Defra
 		}
 	}
 
-	c.init(o)
+	return c.init(o)
 }
 
 // BeginDefragPass collects a number of relocations to be performed for a single pass of the defragmentation

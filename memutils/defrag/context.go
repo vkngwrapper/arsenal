@@ -79,14 +79,23 @@ type MetadataDefragContext[T any] struct {
 
 // Init sets up this MetadataDefragContext to be used in a fresh defragmentation run. MetadataDefragContext can
 // be reused for multiple runs, as long as this method is called prior to beginning each run, including the first
-func (c *MetadataDefragContext[T]) Init() {
+func (c *MetadataDefragContext[T]) Init() error {
 	if c.BlockList == nil {
 		panic("attempted to init defragmentation context without a block list")
+	}
+
+	for index := 0; index < c.BlockList.BlockCount(); index++ {
+		mtData := c.BlockList.MetadataForBlock(index)
+		if !mtData.SupportsRandomAccess() {
+			return errors.New("attempted to defragment a BlockList that does not support random access- non-random access allocators such as Linear allocators cannot be and do not need to be defragmented")
+		}
 	}
 
 	if c.Algorithm == 0 {
 		c.Algorithm = AlgorithmFull
 	}
+
+	return nil
 }
 
 // BlockListCompletePass should be called after a defragmentation pass has been worked: BlockListCollectMoves

@@ -236,6 +236,10 @@ func (m *TLSFBlockMetadata) Validate() error {
 	return nil
 }
 
+func (m *TLSFBlockMetadata) SupportsRandomAccess() bool {
+	return true
+}
+
 func (m *TLSFBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStatistics) {
 	stats.BlockCount++
 	stats.BlockBytes += m.size

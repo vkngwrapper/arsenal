@@ -1338,14 +1338,19 @@ func (a *Allocator) BeginDefragmentation(o DefragmentationInfo, defragContext *D
 		return core1_0.VKErrorUnknown, errors.New("attempted to begin defragmentation with a nil context")
 	}
 
+	var err error
 	if o.Pool != nil {
 		// Linear can't defragment
 		if o.Pool.blockList.Algorithm()&PoolCreateLinearAlgorithm != 0 {
 			return core1_0.VKErrorFeatureNotPresent, core1_0.VKErrorFeatureNotPresent.ToError()
 		}
-		defragContext.initForPool(o.Pool, &o)
+		err = defragContext.initForPool(o.Pool, &o)
 	} else {
-		defragContext.initForAllocator(a, &o)
+		err = defragContext.initForAllocator(a, &o)
+	}
+
+	if err != nil {
+		return core1_0.VKErrorUnknown, err
 	}
 
 	return core1_0.VKSuccess, nil
