@@ -17,6 +17,7 @@ type BlockMetadata interface {
 	AllocationCount() int
 	FreeRegionsCount() int
 	SumFreeSize() int
+	MayHaveFreeBlock(allocType uint32, size int) bool
 	GranularityHandler() GranularityCheck
 
 	IsEmpty() bool

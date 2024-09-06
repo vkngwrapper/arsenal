@@ -959,6 +959,10 @@ func (m *LinearBlockMetadata) populateAllocationRequestLower(
 	return false
 }
 
+func (m *LinearBlockMetadata) MayHaveFreeBlock(allocType uint32, size int) bool {
+	return size <= m.sumFreeSize
+}
+
 func (m *LinearBlockMetadata) populateAllocationRequestUpper(
 	allocSize int, allocAlignment uint,
 	allocType uint32,

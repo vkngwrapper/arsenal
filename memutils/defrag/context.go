@@ -7,7 +7,6 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"math"
 )
 
 // Algorithm identifies which defragmentation algorithm will be used for defrag passes
@@ -70,8 +69,7 @@ type MetadataDefragContext[T any] struct {
 	moves         []DefragmentationMove[T]
 	ignoredAllocs int
 
-	immovableBlockCount    int
-	smallestFailedRelocate int
+	immovableBlockCount int
 
 	// scratchStats exists to avoid allocating statistics objects when passing them in to be populated
 	// because we pass them to an interface so the escape analyzer will get annoying about it
@@ -88,7 +86,6 @@ func (c *MetadataDefragContext[T]) Init() {
 	if c.Algorithm == 0 {
 		c.Algorithm = AlgorithmFull
 	}
-	c.smallestFailedRelocate = math.MaxInt
 }
 
 // BlockListCompletePass should be called after a defragmentation pass has been worked: BlockListCollectMoves
@@ -266,7 +263,7 @@ func (c *MetadataDefragContext[T]) allocFromBlock(blockIndex int, mtData metadat
 func (c *MetadataDefragContext[T]) allocInOtherBlock(start, end int, data *MoveAllocationData[T]) bool {
 	for ; start < end; start++ {
 		dstMetadata := c.BlockList.MetadataForBlock(start)
-		if dstMetadata.SumFreeSize() >= data.Move.Size {
+		if dstMetadata.MayHaveFreeBlock(data.SuballocationType, data.Move.Size) {
 			data.Move.DstTmpAllocation = c.BlockList.CreateAlloc()
 			res, err := c.allocFromBlock(start, dstMetadata,
 				data.Move.Size,
@@ -359,7 +356,7 @@ func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockIndex int
 
 func (c *MetadataDefragContext[T]) reallocSuballocHandler(pass *PassContext, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool {
 	offset := c.mustFindOffset(mtdata, handle)
-	if offset != 0 && mtdata.SumFreeSize() >= moveData.Move.Size {
+	if offset != 0 && mtdata.MayHaveFreeBlock(moveData.SuballocationType, moveData.Move.Size) {
 		if c.allocIfLowerOffset(offset, blockIndex, mtdata, handle, &moveData) {
 			return pass.incrementCounters(moveData.Move.Size)
 		}
@@ -373,16 +370,8 @@ func (c *MetadataDefragContext[T]) defragFastSuballocHandler(pass *PassContext, 
 		return true
 	}
 
-	if moveData.Move.Size >= c.smallestFailedRelocate {
-		return false
-	}
-
 	success := c.allocInOtherBlock(0, blockIndex, &moveData)
 	if !success {
-		if moveData.Move.Size < c.smallestFailedRelocate {
-			c.smallestFailedRelocate = moveData.Move.Size
-		}
-
 		return false
 	}
 
@@ -393,15 +382,15 @@ func (c *MetadataDefragContext[T]) defragFastSuballocHandler(pass *PassContext, 
 func (c *MetadataDefragContext[T]) defragFullSuballocHandler(pass *PassContext, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool {
 	// Check all previous blocks for free space
 	prevMoveCount := len(c.moves)
-	if c.allocInOtherBlock(0, blockIndex, &moveData) {
+	if blockIndex > 0 && c.allocInOtherBlock(0, blockIndex, &moveData) {
 		return pass.incrementCounters(moveData.Move.Size)
 	}
 
 	// If no room found then realloc within block for lower offset
 	offset := c.mustFindOffset(mtdata, handle)
 	if prevMoveCount == len(c.moves) &&
-		offset != 0 &&
-		mtdata.SumFreeSize() >= moveData.Move.Size {
+		offset > 0 &&
+		mtdata.MayHaveFreeBlock(moveData.SuballocationType, moveData.Move.Size) {
 
 		if c.allocIfLowerOffset(offset, blockIndex, mtdata, handle, &moveData) {
 			return pass.incrementCounters(moveData.Move.Size)

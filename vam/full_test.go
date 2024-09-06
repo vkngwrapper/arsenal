@@ -453,7 +453,7 @@ func BenchmarkAllocDefragFast(b *testing.B) {
 		var defragContext DefragmentationContext
 		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
 			Flags:                 DefragmentationFlagAlgorithmFast,
-			MaxAllocationsPerPass: 50,
+			MaxAllocationsPerPass: 100,
 		}, &defragContext)
 		require.NoError(b, err)
 
@@ -517,7 +517,7 @@ func BenchmarkAllocDefragFull(b *testing.B) {
 		var defragContext DefragmentationContext
 		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
 			Flags:                 DefragmentationFlagAlgorithmFull,
-			MaxAllocationsPerPass: 50,
+			MaxAllocationsPerPass: 20,
 		}, &defragContext)
 		require.NoError(b, err)
 
@@ -578,7 +578,7 @@ func BenchmarkAllocDefragBig(b *testing.B) {
 		var defragContext DefragmentationContext
 		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
 			Flags:                 DefragmentationFlagAlgorithmFull,
-			MaxAllocationsPerPass: 50,
+			MaxAllocationsPerPass: 20,
 		}, &defragContext)
 		require.NoError(b, err)
 

@@ -310,6 +310,38 @@ func (m *TLSFBlockMetadata) sizeToSecondIndex(size int, memoryClass uint8) uint1
 	return uint16((size - 1) / 64)
 }
 
+func (m *TLSFBlockMetadata) sizeForNextList(allocSize int) int {
+	// Round up to the next block
+	sizeForNextList := allocSize
+
+	smallSizeStep := SmallBufferSize / 4
+	if allocSize > SmallBufferSize {
+		mostSignificantBit := 63 - bits.LeadingZeros64(uint64(allocSize))
+		sizeForNextList += int(uint(1) << (mostSignificantBit - int(SecondLevelIndex)))
+	} else if allocSize > SmallBufferSize-smallSizeStep {
+		sizeForNextList = SmallBufferSize + 1
+	} else {
+		sizeForNextList += smallSizeStep
+	}
+
+	return sizeForNextList
+}
+
+func (m *TLSFBlockMetadata) MayHaveFreeBlock(allocType uint32, size int) bool {
+	if m.nullBlock.size >= size {
+		return true
+	}
+
+	if size > m.blocksFreeSize {
+		return false
+	}
+
+	roundedSize, _ := m.granularityHandler.RoundUpAllocRequest(allocType, size, 1)
+	memoryClass := m.sizeToMemoryClass(roundedSize)
+	freeMap := m.isFreeBitmap & (math.MaxUint32 << memoryClass)
+	return freeMap != 0
+}
+
 func (m *TLSFBlockMetadata) CreateAllocationRequest(
 	allocSize int, allocAlignment uint,
 	upperAddress bool,
@@ -345,17 +377,7 @@ func (m *TLSFBlockMetadata) CreateAllocationRequest(
 	}
 
 	// Round up to the next block
-	sizeForNextList := allocSize
-
-	smallSizeStep := SmallBufferSize / 4
-	if allocSize > SmallBufferSize {
-		mostSignificantBit := 63 - bits.LeadingZeros64(uint64(allocSize))
-		sizeForNextList += int(uint(1) << (mostSignificantBit - int(SecondLevelIndex)))
-	} else if allocSize > SmallBufferSize-smallSizeStep {
-		sizeForNextList = SmallBufferSize + 1
-	} else {
-		sizeForNextList += smallSizeStep
-	}
+	sizeForNextList := m.sizeForNextList(allocSize)
 
 	nextListIndex := 0
 	prevListIndex := 0
