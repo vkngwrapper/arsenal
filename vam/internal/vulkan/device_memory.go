@@ -37,18 +37,18 @@ type MemoryCallbacks interface {
 
 type DeviceMemoryProperties struct {
 	// Number of real allocations that have been made from device memory
-	blockCount [common.MaxMemoryHeaps]int32
+	blockCount [common.MaxMemoryHeaps]atomic.Int32
 	// Number of user allocations that have actually been doled out for use- this includes the number
 	// of dedicated allocations + the number of block suballocations
-	allocationCount [common.MaxMemoryHeaps]int32
+	allocationCount [common.MaxMemoryHeaps]atomic.Int32
 	// Size of real allocations that have been made from device memory
-	blockBytes [common.MaxMemoryHeaps]int64
+	blockBytes [common.MaxMemoryHeaps]atomic.Int64
 	// Size of user allocations that have actually been doled out for use- this includes the size
 	// of dedicated allocations + the size of block suballocations
-	allocationBytes [common.MaxMemoryHeaps]int64
+	allocationBytes [common.MaxMemoryHeaps]atomic.Int64
 
 	// If we're using ext_memory_budget, use this to maintain budget data
-	operationsSinceBudgetFetch uint32
+	operationsSinceBudgetFetch atomic.Uint32
 	budgetMutex                utils.OptionalRWMutex
 	vulkanUsage                [common.MaxMemoryHeaps]int
 	vulkanBudget               [common.MaxMemoryHeaps]int
@@ -59,7 +59,7 @@ type DeviceMemoryProperties struct {
 	allocationCallbacks *driver.AllocationCallbacks
 	memoryCallbacks     MemoryCallbacks
 	extensions          *ExtensionData
-	memoryCount         uint32
+	memoryCount         atomic.Uint32
 	heapLimits          []int
 
 	device                    core1_0.Device
@@ -179,37 +179,37 @@ func (m *DeviceMemoryProperties) IsMemoryTypeHostNonCoherent(memoryTypeIndex int
 }
 
 func (m *DeviceMemoryProperties) addBlockAllocation(heapIndex int, allocationSize int) {
-	atomic.AddInt64(&m.blockBytes[heapIndex], int64(allocationSize))
-	atomic.AddInt32(&m.blockCount[heapIndex], 1)
+	m.blockBytes[heapIndex].Add(int64(allocationSize))
+	m.blockCount[heapIndex].Add(1)
 }
 
 func (m *DeviceMemoryProperties) addBlockAllocationWithBudget(heapIndex, allocationSize, maxAllocatable int) (common.VkResult, error) {
 	for {
-		currentVal := atomic.LoadInt64(&m.blockBytes[heapIndex])
+		currentVal := m.blockBytes[heapIndex].Load()
 		targetVal := currentVal + int64(allocationSize)
 
 		if targetVal > int64(maxAllocatable) {
 			return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
 		}
 
-		if atomic.CompareAndSwapInt64(&m.blockBytes[heapIndex], currentVal, targetVal) {
+		if m.blockBytes[heapIndex].CompareAndSwap(currentVal, targetVal) {
 			break
 		}
 	}
 
-	atomic.AddInt32(&m.blockCount[heapIndex], 1)
+	m.blockCount[heapIndex].Add(1)
 	return core1_0.VKSuccess, nil
 }
 
 func (m *DeviceMemoryProperties) removeBlockAllocation(heapIndex, allocationSize int) {
-	newVal := atomic.AddInt64(&m.blockBytes[heapIndex], int64(-allocationSize))
+	newVal := m.blockBytes[heapIndex].Add(int64(-allocationSize))
 
 	if newVal < 0 {
 		panic(fmt.Sprintf("block bytes budget for heapIndex %d went negative", heapIndex))
 	}
 
 	// Decrement
-	newCountVal := atomic.AddInt32(&m.blockCount[heapIndex], -1)
+	newCountVal := m.blockCount[heapIndex].Add(-1)
 	if newCountVal < 0 {
 		panic(fmt.Sprintf("block count budget for heapIndex %d went negative", heapIndex))
 	}
@@ -218,12 +218,12 @@ func (m *DeviceMemoryProperties) removeBlockAllocation(heapIndex, allocationSize
 func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	allocateInfo core1_0.MemoryAllocateInfo,
 ) (mem *SynchronizedMemory, res common.VkResult, err error) {
-	newDeviceCount := atomic.AddUint32(&m.memoryCount, 1)
+	newDeviceCount := m.memoryCount.Add(1)
 	defer func() {
 		// If we failed out, roll back the device increment
 		if err != nil {
 			// Decrement
-			atomic.AddUint32(&m.memoryCount, ^uint32(0))
+			m.memoryCount.Add(^uint32(0))
 		}
 	}()
 
@@ -263,7 +263,7 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 		return nil, res, err
 	}
 
-	atomic.AddUint32(&m.operationsSinceBudgetFetch, 1)
+	m.operationsSinceBudgetFetch.Add(1)
 
 	if m.memoryCallbacks != nil {
 		m.memoryCallbacks.Allocate(
@@ -290,31 +290,31 @@ func (m *DeviceMemoryProperties) FreeVulkanMemory(memoryType int, size int, memo
 	heapIndex := m.MemoryTypeIndexToHeapIndex(memoryType)
 	m.removeBlockAllocation(heapIndex, size)
 	// Decrement
-	atomic.AddUint32(&m.memoryCount, ^uint32(0))
+	m.memoryCount.Add(^uint32(0))
 }
 
 func (m *DeviceMemoryProperties) AddAllocation(heapIndex int, size int) {
-	atomic.AddInt64(&m.allocationBytes[heapIndex], int64(size))
-	atomic.AddInt32(&m.allocationCount[heapIndex], 1)
+	m.allocationBytes[heapIndex].Add(int64(size))
+	m.allocationCount[heapIndex].Add(1)
 
 	if m.extensions.UseMemoryBudget {
-		atomic.AddUint32(&m.operationsSinceBudgetFetch, 1)
+		m.operationsSinceBudgetFetch.Add(1)
 	}
 }
 
 func (m *DeviceMemoryProperties) RemoveAllocation(heapIndex int, size int) {
-	newSizeVal := atomic.AddInt64(&m.allocationBytes[heapIndex], -int64(size))
+	newSizeVal := m.allocationBytes[heapIndex].Add(-int64(size))
 	if newSizeVal < 0 {
 		panic(fmt.Sprintf("allocation bytes budget for heapIndex %d went negative", heapIndex))
 	}
 
-	newCountVal := atomic.AddInt32(&m.allocationCount[heapIndex], -1)
+	newCountVal := m.allocationCount[heapIndex].Add(-1)
 	if newCountVal < 0 {
 		panic(fmt.Sprintf("allocation count budget for heapIndex %d went negative", heapIndex))
 	}
 
 	if m.extensions.UseMemoryBudget {
-		atomic.AddUint32(&m.operationsSinceBudgetFetch, 1)
+		m.operationsSinceBudgetFetch.Add(1)
 	}
 }
 
@@ -324,7 +324,7 @@ func (m *DeviceMemoryProperties) ExternalMemoryTypes(memoryTypeIndex int) khr_ex
 
 func (m *DeviceMemoryProperties) HeapBudget(heapIndex int, budget *Budget) {
 	if m.extensions.UseMemoryBudget {
-		operations := atomic.LoadUint32(&m.operationsSinceBudgetFetch)
+		operations := m.operationsSinceBudgetFetch.Load()
 		if operations > 30 {
 			m.UpdateVulkanBudget()
 			m.HeapBudget(heapIndex, budget)
@@ -332,10 +332,10 @@ func (m *DeviceMemoryProperties) HeapBudget(heapIndex int, budget *Budget) {
 		}
 	}
 
-	budget.Statistics.BlockCount = int(m.blockCount[heapIndex])
-	budget.Statistics.AllocationCount = int(m.allocationCount[heapIndex])
-	budget.Statistics.BlockBytes = int(m.blockBytes[heapIndex])
-	budget.Statistics.AllocationBytes = int(m.allocationBytes[heapIndex])
+	budget.Statistics.BlockCount = int(m.blockCount[heapIndex].Load())
+	budget.Statistics.AllocationCount = int(m.allocationCount[heapIndex].Load())
+	budget.Statistics.BlockBytes = int(m.blockBytes[heapIndex].Load())
+	budget.Statistics.AllocationBytes = int(m.allocationBytes[heapIndex].Load())
 
 	if !m.extensions.UseMemoryBudget {
 		budget.Usage = budget.Statistics.BlockBytes
@@ -422,7 +422,7 @@ func (m *DeviceMemoryProperties) CalculateBufferImageGranularity() int {
 }
 
 func (m *DeviceMemoryProperties) AllocationCount() uint32 {
-	return atomic.LoadUint32(&m.memoryCount)
+	return m.memoryCount.Load()
 }
 
 func (m *DeviceMemoryProperties) IsIntegratedGPU() bool {
@@ -451,7 +451,7 @@ func (m *DeviceMemoryProperties) UpdateVulkanBudget() {
 	for i := 0; i < m.MemoryHeapCount(); i++ {
 		m.vulkanUsage[i] = budgetProps.HeapUsage[i]
 		m.vulkanBudget[i] = budgetProps.HeapBudget[i]
-		m.blockBytesAtBudgetFetch[i] = atomic.LoadInt64(&m.blockBytes[i])
+		m.blockBytesAtBudgetFetch[i] = m.blockBytes[i].Load()
 
 		// Some bugged drivers return the budget incorrectly so check for that and estimate
 		if m.vulkanBudget[i] == 0 {
@@ -464,5 +464,5 @@ func (m *DeviceMemoryProperties) UpdateVulkanBudget() {
 			m.vulkanUsage[i] = int(m.blockBytesAtBudgetFetch[i])
 		}
 	}
-	atomic.StoreUint32(&m.operationsSinceBudgetFetch, 0)
+	m.operationsSinceBudgetFetch.Store(0)
 }
