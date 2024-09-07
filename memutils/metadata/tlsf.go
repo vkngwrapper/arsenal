@@ -64,7 +64,7 @@ type TLSFBlockMetadata struct {
 	memoryClasses     int
 	innerIsFreeBitmap [MaxMemoryClasses]uint32
 
-	nextAllocationHandle BlockAllocationHandle
+	nextAllocationHandle atomic.Uint64
 	handleKey            *swiss.Map[BlockAllocationHandle, *tlsfBlock]
 	freeList             []*tlsfBlock
 	nullBlock            *tlsfBlock
@@ -88,7 +88,7 @@ func (m *TLSFBlockMetadata) allocateBlock() *tlsfBlock {
 	b.nextFree = nil
 	b.prevFree = nil
 	b.userData = nil
-	b.blockHandle = BlockAllocationHandle(atomic.AddUint64((*uint64)(&m.nextAllocationHandle), 1))
+	b.blockHandle = BlockAllocationHandle(m.nextAllocationHandle.Add(1))
 	m.handleKey.Put(b.blockHandle, b)
 	return b
 }
