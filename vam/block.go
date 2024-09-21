@@ -64,7 +64,20 @@ func (b *deviceMemoryBlock) Init(
 func (b *deviceMemoryBlock) Destroy() error {
 	if !b.metadata.IsEmpty() {
 		// Log all remaining allocations
-		b.metadata.DebugLogAllAllocations(b.logger, b.logUnreleasedMemory)
+		err := b.metadata.VisitAllRegions(func(handle metadata.BlockAllocationHandle, offset int, size int, userData any, free bool) error {
+			if free {
+				return nil
+			}
+
+			b.logUnreleasedMemory(offset, size, userData)
+			return nil
+		})
+		if err != nil {
+			b.logger.LogAttrs(nil,
+				slog.LevelError,
+				"[UNRELEASED MEMORY] error while iterating unreleased memory",
+				slog.Any("error", err))
+		}
 
 		return errors.New("some allocations were not freed before the destruction of this memory block!")
 	}
@@ -80,7 +93,7 @@ func (b *deviceMemoryBlock) Destroy() error {
 	return nil
 }
 
-func (b *deviceMemoryBlock) logUnreleasedMemory(logger *slog.Logger, offset, size int, userData any) {
+func (b *deviceMemoryBlock) logUnreleasedMemory(offset, size int, userData any) {
 	allocation := userData.(*Allocation)
 	userData = allocation.UserData()
 	name := allocation.Name()
@@ -88,7 +101,7 @@ func (b *deviceMemoryBlock) logUnreleasedMemory(logger *slog.Logger, offset, siz
 		name = "empty"
 	}
 
-	logger.LogAttrs(nil, slog.LevelError, "[UNRELEASED MEMORY] unfreed allocation",
+	b.logger.LogAttrs(nil, slog.LevelError, "[UNRELEASED MEMORY] unfreed allocation",
 		slog.Int("offset", offset),
 		slog.Int("size", size),
 		slog.Any("userData", userData),
@@ -104,7 +117,7 @@ func (b *deviceMemoryBlock) Validate() error {
 		return errors.New("this memory block's metadata has an invalid size")
 	}
 
-	err := b.metadata.VisitAllBlocks(func(handle metadata.BlockAllocationHandle, offset, size int, userData any, free bool) error {
+	err := b.metadata.VisitAllRegions(func(handle metadata.BlockAllocationHandle, offset, size int, userData any, free bool) error {
 		allocation, isAllocation := userData.(*Allocation)
 		if free && isAllocation {
 			return errors.Errorf("an allocation at offset %d is marked as free but contains an allocation object", offset)
@@ -135,7 +148,12 @@ func (b *deviceMemoryBlock) CheckCorruption() (res common.VkResult, err error) {
 		}
 	}()
 
-	return b.metadata.CheckCorruption(data)
+	err = b.metadata.CheckCorruption(data)
+	if err != nil {
+		return core1_0.VKErrorUnknown, err
+	}
+
+	return core1_0.VKSuccess, nil
 }
 
 func (b *deviceMemoryBlock) WriteMagicBlockAfterAllocation(allocOffset int, allocSize int) (res common.VkResult, err error) {

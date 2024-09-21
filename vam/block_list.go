@@ -691,7 +691,7 @@ func (l *memoryBlockList) PrintDetailedMap(writer *jwriter.Writer) {
 		blockObj := objState.Name(strconv.Itoa(block.id)).Object()
 
 		blockObj.Name("MapReferences").Int(block.memory.References())
-		block.metadata.PrintDetailedMapHeader(blockObj)
+		block.metadata.BlockJsonData(blockObj)
 
 		l.printDetailedMapAllocations(block.metadata, blockObj)
 
@@ -704,7 +704,7 @@ func (l *memoryBlockList) printDetailedMapAllocations(md metadata.BlockMetadata,
 	defer arrayState.End()
 
 	// Second pass
-	_ = md.VisitAllBlocks(
+	_ = md.VisitAllRegions(
 		func(handle metadata.BlockAllocationHandle, offset int, size int, userData any, free bool) error {
 			if free {
 				obj := arrayState.Object()

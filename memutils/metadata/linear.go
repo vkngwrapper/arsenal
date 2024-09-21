@@ -5,9 +5,6 @@ import (
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"golang.org/x/exp/slog"
 	"math"
 	"sort"
 	"unsafe"
@@ -210,7 +207,7 @@ func (m *LinearBlockMetadata) FreeRegionsCount() int {
 	return math.MaxInt
 }
 
-func (m *LinearBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error) error {
+func (m *LinearBlockMetadata) VisitAllRegions(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error) error {
 	size := m.Size()
 	firstVector := *m.accessSuballocationsFirst()
 	secondVector := *m.accessSuballocationsSecond()
@@ -359,7 +356,7 @@ func (m *LinearBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStat
 	stats.Statistics.BlockCount++
 	stats.Statistics.BlockBytes += m.Size()
 
-	_ = m.VisitAllBlocks(
+	_ = m.VisitAllRegions(
 		func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error {
 			if free {
 				stats.AddUnusedRange(size)
@@ -378,7 +375,7 @@ func (m *LinearBlockMetadata) AddStatistics(stats *memutils.Statistics) {
 	stats.BlockBytes += size
 	stats.AllocationBytes += size - m.sumFreeSize
 
-	_ = m.VisitAllBlocks(
+	_ = m.VisitAllRegions(
 		func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error {
 			if !free {
 				stats.AllocationCount++
@@ -388,12 +385,12 @@ func (m *LinearBlockMetadata) AddStatistics(stats *memutils.Statistics) {
 		})
 }
 
-func (m *LinearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) {
+func (m *LinearBlockMetadata) BlockJsonData(json jwriter.ObjectState) {
 	// first pass
 	size := m.Size()
 	var unusedRangeCount, usedBytes, allocCount int
 
-	_ = m.VisitAllBlocks(
+	_ = m.VisitAllRegions(
 		func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error {
 			if free {
 				unusedRangeCount++
@@ -406,7 +403,7 @@ func (m *LinearBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) {
 		})
 
 	unusedBytes := size - usedBytes
-	m.PrintDetailedMap_Header(json, unusedBytes, allocCount, unusedRangeCount)
+	m.BlockJsonData(json, unusedBytes, allocCount, unusedRangeCount)
 }
 
 func (m *LinearBlockMetadata) CreateAllocationRequest(
@@ -436,13 +433,13 @@ func (m *LinearBlockMetadata) CreateAllocationRequest(
 	return success, allocRequest, nil
 }
 
-func (m *LinearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.VkResult, error) {
+func (m *LinearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) error {
 	firstVector := *m.accessSuballocationsFirst()
 
 	for i := m.firstNullItemsBeginCount; i < len(firstVector); i++ {
 		suballoc := firstVector[i]
 		if suballoc.Type != 0 && !memutils.ValidateMagicValue(blockData, suballoc.Offset+suballoc.Size) {
-			return core1_0.VKErrorUnknown, errors.New("MEMORY CORRUPTION DETECTED AFTER VALIDATED ALLOCATION!")
+			return errors.New("MEMORY CORRUPTION DETECTED AFTER VALIDATED ALLOCATION!")
 		}
 	}
 
@@ -450,11 +447,11 @@ func (m *LinearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.
 	for i := 0; i < len(secondVector); i++ {
 		suballoc := secondVector[i]
 		if suballoc.Type != 0 && !memutils.ValidateMagicValue(blockData, suballoc.Offset+suballoc.Size) {
-			return core1_0.VKErrorUnknown, errors.New("MEMORY CORRUPTION DETECTED AFTER VALIDATED ALLOCATION!")
+			return errors.New("MEMORY CORRUPTION DETECTED AFTER VALIDATED ALLOCATION!")
 		}
 	}
 
-	return core1_0.VKSuccess, nil
+	return nil
 }
 
 func (m *LinearBlockMetadata) Alloc(req AllocationRequest, allocType uint32, userData any) error {
@@ -617,15 +614,11 @@ func (m *LinearBlockMetadata) AllocationUserData(allocHandle BlockAllocationHand
 }
 
 func (m *LinearBlockMetadata) AllocationListBegin() (BlockAllocationHandle, error) {
-	return 0, errors.New("defragmentation cannot be performed on the linear metadata")
+	return 0, errors.New("this allocator does not support random access")
 }
 
 func (m *LinearBlockMetadata) FindNextAllocation(allocHandle BlockAllocationHandle) (BlockAllocationHandle, error) {
-	return 0, errors.New("defragmentation cannot be performed on the linear metadata")
-}
-
-func (m *LinearBlockMetadata) FindNextFreeRegionSize(allocHandle BlockAllocationHandle) (int, error) {
-	return 0, errors.New("defragmentation cannot be performed on the linear metadata")
+	return 0, errors.New("this allocator does not support random access")
 }
 
 func (m *LinearBlockMetadata) Clear() {
@@ -645,24 +638,6 @@ func (m *LinearBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationH
 	}
 	suballoc.UserData = userData
 	return nil
-}
-
-func (m *LinearBlockMetadata) DebugLogAllAllocations(log *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any)) {
-	firstVector := *m.accessSuballocationsFirst()
-	for i := m.firstNullItemsBeginCount; i < len(firstVector); i++ {
-		suballoc := firstVector[i]
-		if suballoc.Type != 0 {
-			logFunc(log, suballoc.Offset, suballoc.Size, suballoc.UserData)
-		}
-	}
-
-	secondVector := *m.accessSuballocationsSecond()
-	for i := 0; i < len(secondVector); i++ {
-		suballoc := secondVector[i]
-		if suballoc.Type != 0 {
-			logFunc(log, suballoc.Offset, suballoc.Size, suballoc.UserData)
-		}
-	}
 }
 
 func (m *LinearBlockMetadata) findSuballocation(offset int) (*Suballocation, error) {
@@ -834,26 +809,26 @@ func (m *LinearBlockMetadata) populateAllocationRequestLower(
 		resultOffset = memutils.AlignUp(resultOffset, allocAlignment)
 
 		// Check previous suballocations for granularity conflict & align up if necessary
-		if m.bufferImageGranlarity > 1 && m.bufferImageGranlarity != int(allocAlignment) && len(firstVector) > 0 {
-			var bufferImageGranularityConflict bool
+		if m.allocationGranularity > 1 && m.allocationGranularity != int(allocAlignment) && len(firstVector) > 0 {
+			var granularityConflict bool
 
 			for prevSuballocIndex := len(firstVector) - 1; prevSuballocIndex >= 0; prevSuballocIndex-- {
 				prevSuballoc := firstVector[prevSuballocIndex]
-				samePage := blocksOnSamePage(prevSuballoc.Offset, prevSuballoc.Size, resultOffset, m.bufferImageGranlarity)
+				samePage := blocksOnSamePage(prevSuballoc.Offset, prevSuballoc.Size, resultOffset, m.allocationGranularity)
 
 				if !samePage {
 					// We've passed beyond the bounds of the result offset's page
 					break
 				}
 
-				if m.GranularityHandler().AllocationsConflict(prevSuballoc.Type, allocType) {
-					bufferImageGranularityConflict = true
+				if m.granularityHandler.AllocationsConflict(prevSuballoc.Type, allocType) {
+					granularityConflict = true
 					break
 				}
 			}
 
-			if bufferImageGranularityConflict {
-				resultOffset = memutils.AlignUp(resultOffset, uint(m.bufferImageGranlarity))
+			if granularityConflict {
+				resultOffset = memutils.AlignUp(resultOffset, uint(m.allocationGranularity))
 			}
 		}
 
@@ -866,19 +841,19 @@ func (m *LinearBlockMetadata) populateAllocationRequestLower(
 
 		if resultOffset+allocSize+debugMargin <= freeSpaceEnd {
 			// We have enough free space to allocate right here
-			if (allocSize%m.bufferImageGranlarity > 0 || resultOffset%m.bufferImageGranlarity > 0) && m.secondVectorMode == SecondVectorModeDoubleStack {
+			if (allocSize%m.allocationGranularity > 0 || resultOffset%m.allocationGranularity > 0) && m.secondVectorMode == SecondVectorModeDoubleStack {
 				// If we have a double stack, check the second vector to see if there's buffer image granularity conflicts
 				// With our intended spot
 				for nextSuballocIndex := len(secondVector) - 1; nextSuballocIndex >= 0; nextSuballocIndex-- {
 					nextSuballoc := secondVector[nextSuballocIndex]
-					samePage := blocksOnSamePage(resultOffset, allocSize, nextSuballoc.Offset, m.bufferImageGranlarity)
+					samePage := blocksOnSamePage(resultOffset, allocSize, nextSuballoc.Offset, m.allocationGranularity)
 
 					if !samePage {
 						// We've passed beyond the bounds of the result offset's page
 						break
 					}
 
-					if m.GranularityHandler().AllocationsConflict(allocType, nextSuballoc.Type) {
+					if m.granularityHandler.AllocationsConflict(allocType, nextSuballoc.Type) {
 						// We're already as far back as we can manage, so there's no room to place this alloc
 						return false
 					}
@@ -907,14 +882,14 @@ func (m *LinearBlockMetadata) populateAllocationRequestLower(
 		resultOffset := memutils.AlignUp(resultBaseOffset, allocAlignment)
 
 		// Check previous suballocations for image granularity conflicts
-		if m.bufferImageGranlarity > 1 && m.bufferImageGranlarity != int(allocAlignment) && len(secondVector) > 0 {
+		if m.allocationGranularity > 1 && m.allocationGranularity != int(allocAlignment) && len(secondVector) > 0 {
 			var bufferImageGranularityConflict bool
 			for prevSuballocIndex := len(secondVector) - 1; prevSuballocIndex >= 0; prevSuballocIndex-- {
 				prevSuballoc := secondVector[prevSuballocIndex]
-				samePage := blocksOnSamePage(prevSuballoc.Offset, prevSuballoc.Size, resultOffset, m.bufferImageGranlarity)
+				samePage := blocksOnSamePage(prevSuballoc.Offset, prevSuballoc.Size, resultOffset, m.allocationGranularity)
 
 				if samePage {
-					if m.GranularityHandler().AllocationsConflict(prevSuballoc.Type, allocType) {
+					if m.granularityHandler.AllocationsConflict(prevSuballoc.Type, allocType) {
 						bufferImageGranularityConflict = true
 						break
 					}
@@ -925,7 +900,7 @@ func (m *LinearBlockMetadata) populateAllocationRequestLower(
 			}
 
 			if bufferImageGranularityConflict {
-				resultOffset = memutils.AlignUp(resultOffset, uint(m.bufferImageGranlarity))
+				resultOffset = memutils.AlignUp(resultOffset, uint(m.allocationGranularity))
 			}
 		}
 
@@ -937,10 +912,10 @@ func (m *LinearBlockMetadata) populateAllocationRequestLower(
 			// Check next suballocations for image granularity conflicts
 			for nextSuballocIndex := firstVectorIndex; nextSuballocIndex < len(firstVector); nextSuballocIndex++ {
 				nextSuballoc := firstVector[nextSuballocIndex]
-				samePage := blocksOnSamePage(resultOffset, allocSize, nextSuballoc.Offset, m.bufferImageGranlarity)
+				samePage := blocksOnSamePage(resultOffset, allocSize, nextSuballoc.Offset, m.allocationGranularity)
 
 				if samePage {
-					if m.GranularityHandler().AllocationsConflict(allocType, nextSuballoc.Type) {
+					if m.granularityHandler.AllocationsConflict(allocType, nextSuballoc.Type) {
 						// We're back as far as we can be and still have a buffer image granularity conflict with the next
 						// suballoc
 						return false
@@ -1012,25 +987,25 @@ func (m *LinearBlockMetadata) populateAllocationRequestUpper(
 
 	// Check next suballocations from second vector for BufferImageGranularity conflicts. Increase alignment if
 	// necessary
-	if m.bufferImageGranlarity > 1 && m.bufferImageGranlarity != int(allocAlignment) && len(secondVector) > 0 {
+	if m.allocationGranularity > 1 && m.allocationGranularity != int(allocAlignment) && len(secondVector) > 0 {
 		var bufferImageGranularityConflict bool
 		for nextSuballocIndex := len(secondVector) - 1; nextSuballocIndex >= 0; nextSuballocIndex-- {
 			nextSuballoc := secondVector[nextSuballocIndex]
-			samePage := blocksOnSamePage(resultOffset, allocSize, nextSuballoc.Offset, m.bufferImageGranlarity)
+			samePage := blocksOnSamePage(resultOffset, allocSize, nextSuballoc.Offset, m.allocationGranularity)
 
 			if !samePage {
 				// We've passed beyond the bounds of the result offset's page
 				break
 			}
 
-			if m.GranularityHandler().AllocationsConflict(nextSuballoc.Type, allocType) {
+			if m.granularityHandler.AllocationsConflict(nextSuballoc.Type, allocType) {
 				bufferImageGranularityConflict = true
 				break
 			}
 		}
 
 		if bufferImageGranularityConflict {
-			resultOffset = memutils.AlignDown(resultOffset, uint(m.bufferImageGranlarity))
+			resultOffset = memutils.AlignDown(resultOffset, uint(m.allocationGranularity))
 		}
 	}
 
@@ -1046,18 +1021,18 @@ func (m *LinearBlockMetadata) populateAllocationRequestUpper(
 		return false, nil
 	}
 
-	if m.bufferImageGranlarity > 1 {
+	if m.allocationGranularity > 1 {
 		// Check first vector for granularity conflicts
 		for prevSuballocIndex := len(firstVector) - 1; prevSuballocIndex >= 0; prevSuballocIndex-- {
 			prevSuballoc := firstVector[prevSuballocIndex]
-			samePage := blocksOnSamePage(prevSuballoc.Offset, prevSuballoc.Size, resultOffset, m.bufferImageGranlarity)
+			samePage := blocksOnSamePage(prevSuballoc.Offset, prevSuballoc.Size, resultOffset, m.allocationGranularity)
 
 			if !samePage {
 				// We've passed beyond the bounds of the result offset's page
 				break
 			}
 
-			if m.GranularityHandler().AllocationsConflict(allocType, prevSuballoc.Type) {
+			if m.granularityHandler.AllocationsConflict(allocType, prevSuballoc.Type) {
 				// Conflict with a block at the end of the first vector, and there's no room to maneuver
 				// (we're already as far forward as we can go)
 				return false, nil

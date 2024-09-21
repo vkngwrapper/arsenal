@@ -6,9 +6,6 @@ import (
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"golang.org/x/exp/slog"
 	"math"
 	"math/bits"
 	"sync"
@@ -634,7 +631,7 @@ func (m *TLSFBlockMetadata) findFreeBlock(size int) (*tlsfBlock, int) {
 	return m.freeList[listIndex], listIndex
 }
 
-func (m *TLSFBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) {
+func (m *TLSFBlockMetadata) BlockJsonData(json jwriter.ObjectState) {
 	blockCount := m.allocCount + m.blocksFreeCount
 	blockList := make([]*tlsfBlock, blockCount)
 
@@ -652,19 +649,19 @@ func (m *TLSFBlockMetadata) PrintDetailedMapHeader(json jwriter.ObjectState) {
 	stats.Clear()
 	m.AddDetailedStatistics(&stats)
 
-	m.PrintDetailedMap_Header(json, stats.BlockBytes-stats.AllocationBytes, stats.AllocationCount, stats.UnusedRangeCount)
+	m.BlockJsonData(json, stats.BlockBytes-stats.AllocationBytes, stats.AllocationCount, stats.UnusedRangeCount)
 }
 
-func (m *TLSFBlockMetadata) CheckCorruption(blockData unsafe.Pointer) (common.VkResult, error) {
+func (m *TLSFBlockMetadata) CheckCorruption(blockData unsafe.Pointer) error {
 	for block := m.nullBlock.prevPhysical; block != nil; block = block.prevPhysical {
 		if !block.IsFree() {
 			if !memutils.ValidateMagicValue(blockData, block.offset+block.size) {
-				return core1_0.VKErrorUnknown, errors.New("memory corruption detected after validated allocation")
+				return errors.New("memory corruption detected after validated allocation")
 			}
 		}
 	}
 
-	return core1_0.VKSuccess, nil
+	return nil
 }
 
 func (m *TLSFBlockMetadata) Alloc(req AllocationRequest, suballocType uint32, userData any) error {
@@ -783,7 +780,7 @@ func (m *TLSFBlockMetadata) Alloc(req AllocationRequest, suballocType uint32, us
 		m.insertFreeBlock(newBlock)
 	}
 
-	m.granularityHandler.AllocPages(req.CustomData, currentBlock.offset, currentBlock.size)
+	m.granularityHandler.AllocRegions(req.CustomData, currentBlock.offset, currentBlock.size)
 	m.allocCount++
 
 	return nil
@@ -799,7 +796,7 @@ func (m *TLSFBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 	}
 
 	next := block.nextPhysical
-	m.granularityHandler.FreePages(block.offset, block.size)
+	m.granularityHandler.FreeRegions(block.offset, block.size)
 	m.allocCount--
 
 	if memutils.DebugMargin > 0 {
@@ -920,7 +917,7 @@ func (m *TLSFBlockMetadata) mergeBlock(block *tlsfBlock, prev *tlsfBlock) {
 	m.freeBlock(prev)
 }
 
-func (m *TLSFBlockMetadata) VisitAllBlocks(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error) error {
+func (m *TLSFBlockMetadata) VisitAllRegions(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error) error {
 	for block := m.nullBlock; block != nil; block = block.prevPhysical {
 		err := handleBlock(block.blockHandle, block.offset, block.size, block.userData, block.IsFree())
 		if err != nil {
@@ -942,7 +939,7 @@ func (m *TLSFBlockMetadata) AllocationListBegin() (BlockAllocationHandle, error)
 		}
 	}
 
-	return NoAllocation, errors.New("the metadata has an allocation but none could be found in the physical blocks")
+	panic("the metadata has an allocation but none could be found in the physical blocks")
 }
 
 func (m *TLSFBlockMetadata) FindNextAllocation(alloc BlockAllocationHandle) (BlockAllocationHandle, error) {
@@ -961,22 +958,6 @@ func (m *TLSFBlockMetadata) FindNextAllocation(alloc BlockAllocationHandle) (Blo
 	}
 
 	return NoAllocation, nil
-}
-
-func (m *TLSFBlockMetadata) FindNextFreeRegionSize(alloc BlockAllocationHandle) (int, error) {
-	block, err := m.getBlock(alloc)
-	if err != nil {
-		return 0, err
-	}
-	if block.IsFree() {
-		return 0, errors.New("provided block cannot be free")
-	}
-
-	if block.prevPhysical != nil && block.prevPhysical.IsFree() {
-		return block.prevPhysical.size, nil
-	}
-
-	return 0, nil
 }
 
 func (m *TLSFBlockMetadata) Clear() {
@@ -999,14 +980,6 @@ func (m *TLSFBlockMetadata) Clear() {
 	m.freeList = make([]*tlsfBlock, len(m.freeList))
 	m.innerIsFreeBitmap = [MaxMemoryClasses]uint32{}
 	m.granularityHandler.Clear()
-}
-
-func (m *TLSFBlockMetadata) DebugLogAllAllocations(logger *slog.Logger, logFunc func(log *slog.Logger, offset int, size int, userData any)) {
-	for block := m.nullBlock.prevPhysical; block != nil; block = block.prevPhysical {
-		if !block.IsFree() {
-			logFunc(logger, block.offset, block.size, block.userData)
-		}
-	}
 }
 
 func (m *TLSFBlockMetadata) AllocationOffset(allocHandle BlockAllocationHandle) (int, error) {

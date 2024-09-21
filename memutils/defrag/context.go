@@ -228,15 +228,6 @@ func (c *MetadataDefragContext[T]) mustFindNextAllocation(mtdata metadata.BlockM
 	return handle
 }
 
-func (c *MetadataDefragContext[T]) mustFindNextFreeRegionSize(mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle) int {
-	size, err := mtdata.FindNextFreeRegionSize(handle)
-	if err != nil {
-		panic(fmt.Sprintf("unexpected error when getting next free region size: %+v", err))
-	}
-
-	return size
-}
-
 func (c *MetadataDefragContext[T]) mustFindOffset(mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle) int {
 	offset, err := mtdata.AllocationOffset(handle)
 	if err != nil {
