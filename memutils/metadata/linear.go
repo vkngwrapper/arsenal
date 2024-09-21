@@ -403,7 +403,7 @@ func (m *LinearBlockMetadata) BlockJsonData(json jwriter.ObjectState) {
 		})
 
 	unusedBytes := size - usedBytes
-	m.BlockJsonData(json, unusedBytes, allocCount, unusedRangeCount)
+	m.WriteBlockJson(json, unusedBytes, allocCount, unusedRangeCount)
 }
 
 func (m *LinearBlockMetadata) CreateAllocationRequest(

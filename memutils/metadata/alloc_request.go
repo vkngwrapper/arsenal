@@ -30,7 +30,7 @@ func (t AllocationRequestType) String() string {
 }
 
 // AllocationRequest is a type returned from BlockMetadata.CreateAllocationRequest which indicates where and how
-// the metadata intends to allocate new memory. This allocation can be applied to the actual memory pool consuming
+// the metadata intends to allocate new memory. This allocation can be applied to the actual memory system consuming
 // memutils, and then committed to the metadata with BlockMetadata.Alloc
 type AllocationRequest struct {
 	// BlockAllocationHandle is a numeric handle used to identify individual allocations within the metadata

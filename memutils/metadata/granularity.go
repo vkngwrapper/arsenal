@@ -17,8 +17,8 @@ type GranularityCheck interface {
 	FreeRegions(offset, size int)
 	// Clear removes all regions of memory
 	Clear()
-	// CheckConflictAndAlignUp is provided information about a potential offset and attempts to find a non-
-	// conflicting place for that offset. If the offset is being placed in a location where it will conflict
+	// CheckConflictAndAlignUp is provided information about a potential allocation and attempts to find a non-
+	// conflicting place for that allocation. If the offset is being placed in a location where it will conflict
 	// with an existing allocation, the allocation will attempt to be nudged forward into a new slot.  An
 	// updated allocation offset will be returned, along with a boolean indicating whether a non-conflicting
 	// location could be found.

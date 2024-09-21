@@ -649,7 +649,7 @@ func (m *TLSFBlockMetadata) BlockJsonData(json jwriter.ObjectState) {
 	stats.Clear()
 	m.AddDetailedStatistics(&stats)
 
-	m.BlockJsonData(json, stats.BlockBytes-stats.AllocationBytes, stats.AllocationCount, stats.UnusedRangeCount)
+	m.WriteBlockJson(json, stats.BlockBytes-stats.AllocationBytes, stats.AllocationCount, stats.UnusedRangeCount)
 }
 
 func (m *TLSFBlockMetadata) CheckCorruption(blockData unsafe.Pointer) error {

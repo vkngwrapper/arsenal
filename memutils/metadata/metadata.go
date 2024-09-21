@@ -188,8 +188,8 @@ func (m *BlockMetadataBase) Init(size int) {
 // Size returns the size of the block in bytes
 func (m *BlockMetadataBase) Size() int { return m.size }
 
-// BlockJsonData populates a json object with information about this block
-func (m *BlockMetadataBase) BlockJsonData(json jwriter.ObjectState, unusedBytes, allocationCount, unusedRangeCount int) {
+// WriteBlockJson populates a json object with information about this block
+func (m *BlockMetadataBase) WriteBlockJson(json jwriter.ObjectState, unusedBytes, allocationCount, unusedRangeCount int) {
 	json.Name("TotalBytes").Int(m.Size())
 	json.Name("UnusedBytes").Int(unusedBytes)
 	json.Name("Allocations").Int(allocationCount)
