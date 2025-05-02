@@ -1,5 +1,7 @@
 # memutils
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/vkngwrapper/arsenal/memutils.svg)](https://pkg.go.dev/github.com/vkngwrapper/arsenal/memutils)
+
 A pure-go port of some parts of VulkanMemoryAllocator.  The rest is in arsenal/vam, which 
  contains all Vulkan-specific code and consumes this library.
 
