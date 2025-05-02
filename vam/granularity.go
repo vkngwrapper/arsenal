@@ -1,9 +1,10 @@
 package vam
 
 import (
+	"math/bits"
+
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
-	"math/bits"
 )
 
 const (
@@ -11,7 +12,7 @@ const (
 )
 
 type regionInfo struct {
-	allocType  SuballocationType
+	allocType  suballocationType
 	allocCount uint16
 }
 
@@ -19,12 +20,12 @@ type validationContext struct {
 	regionAllocs []uint16
 }
 
-type BlockBufferImageGranularity struct {
+type blockBufferImageGranularity struct {
 	bufferImageGranularity uint
 	regionInfo             []regionInfo
 }
 
-func (g *BlockBufferImageGranularity) Init(size int) {
+func (g *blockBufferImageGranularity) Init(size int) {
 	if g.IsEnabled() {
 		count := size / int(g.bufferImageGranularity)
 		if size%int(g.bufferImageGranularity) > 0 {
@@ -39,18 +40,18 @@ func (g *BlockBufferImageGranularity) Init(size int) {
 	}
 }
 
-func (g *BlockBufferImageGranularity) Destroy() {
+func (g *blockBufferImageGranularity) Destroy() {
 	if g.regionInfo != nil {
 		g.regionInfo = nil
 	}
 }
 
-func (g *BlockBufferImageGranularity) AllocationsConflict(
+func (g *blockBufferImageGranularity) AllocationsConflict(
 	firstAllocType uint32,
 	secondAllocType uint32,
 ) bool {
-	subAllocType1 := SuballocationType(firstAllocType)
-	subAllocType2 := SuballocationType(secondAllocType)
+	subAllocType1 := suballocationType(firstAllocType)
+	subAllocType2 := suballocationType(secondAllocType)
 
 	if subAllocType1 > subAllocType2 {
 		subAllocType1, subAllocType2 = subAllocType2, subAllocType1
@@ -75,9 +76,9 @@ func (g *BlockBufferImageGranularity) AllocationsConflict(
 	return false
 }
 
-func (g *BlockBufferImageGranularity) RoundUpAllocRequest(allocType uint32, allocSize int, allocAlignment uint) (int, uint) {
+func (g *blockBufferImageGranularity) RoundUpAllocRequest(allocType uint32, allocSize int, allocAlignment uint) (int, uint) {
 	if g.bufferImageGranularity > 1 {
-		suballocType := SuballocationType(allocType)
+		suballocType := suballocationType(allocType)
 		imageRoundUp := g.bufferImageGranularity <= MaxLowBufferImageGranularity && suballocType == SuballocationImageOptimal
 		generalRoundUp := suballocType == SuballocationImageUnknown || suballocType == SuballocationUnknown
 
@@ -93,7 +94,7 @@ func (g *BlockBufferImageGranularity) RoundUpAllocRequest(allocType uint32, allo
 	return allocSize, allocAlignment
 }
 
-func (g *BlockBufferImageGranularity) CheckConflictAndAlignUp(
+func (g *blockBufferImageGranularity) CheckConflictAndAlignUp(
 	allocOffset, allocSize, regionOffset, regionSize int,
 	allocType uint32,
 ) (int, bool) {
@@ -123,21 +124,21 @@ func (g *BlockBufferImageGranularity) CheckConflictAndAlignUp(
 	return allocOffset, false
 }
 
-func (g *BlockBufferImageGranularity) AllocRegions(allocType uint32, offset, size int) {
+func (g *blockBufferImageGranularity) AllocRegions(allocType uint32, offset, size int) {
 	if !g.IsEnabled() {
 		return
 	}
 
 	startRegion := g.getStartSlot(offset)
-	g.allocRegion(&g.regionInfo[startRegion], SuballocationType(allocType))
+	g.allocRegion(&g.regionInfo[startRegion], suballocationType(allocType))
 
 	endRegion := g.getEndSlot(offset, size)
 	if startRegion != endRegion {
-		g.allocRegion(&g.regionInfo[endRegion], SuballocationType(allocType))
+		g.allocRegion(&g.regionInfo[endRegion], suballocationType(allocType))
 	}
 }
 
-func (g *BlockBufferImageGranularity) FreeRegions(offset, size int) {
+func (g *blockBufferImageGranularity) FreeRegions(offset, size int) {
 	if !g.IsEnabled() {
 		return
 	}
@@ -157,13 +158,13 @@ func (g *BlockBufferImageGranularity) FreeRegions(offset, size int) {
 	}
 }
 
-func (g *BlockBufferImageGranularity) Clear() {
+func (g *blockBufferImageGranularity) Clear() {
 	if g.regionInfo != nil {
 		g.regionInfo = make([]regionInfo, len(g.regionInfo))
 	}
 }
 
-func (g *BlockBufferImageGranularity) StartValidation() any {
+func (g *blockBufferImageGranularity) StartValidation() any {
 	context := &validationContext{}
 
 	if g.IsEnabled() {
@@ -173,7 +174,7 @@ func (g *BlockBufferImageGranularity) StartValidation() any {
 	return context
 }
 
-func (g *BlockBufferImageGranularity) Validate(anyCtx any, offset, size int) error {
+func (g *blockBufferImageGranularity) Validate(anyCtx any, offset, size int) error {
 	if !g.IsEnabled() {
 		return nil
 	}
@@ -196,7 +197,7 @@ func (g *BlockBufferImageGranularity) Validate(anyCtx any, offset, size int) err
 	return nil
 }
 
-func (g *BlockBufferImageGranularity) FinishValidation(anyCtx any) error {
+func (g *blockBufferImageGranularity) FinishValidation(anyCtx any) error {
 	if !g.IsEnabled() {
 		return nil
 	}
@@ -213,7 +214,7 @@ func (g *BlockBufferImageGranularity) FinishValidation(anyCtx any) error {
 	return nil
 }
 
-func (g *BlockBufferImageGranularity) allocRegion(region *regionInfo, allocType SuballocationType) {
+func (g *blockBufferImageGranularity) allocRegion(region *regionInfo, allocType suballocationType) {
 	if region.allocCount == 0 || (region.allocCount > 0 && region.allocType == SuballocationFree) {
 		region.allocType = allocType
 	}
@@ -221,18 +222,18 @@ func (g *BlockBufferImageGranularity) allocRegion(region *regionInfo, allocType 
 	region.allocCount++
 }
 
-func (g *BlockBufferImageGranularity) IsEnabled() bool {
+func (g *blockBufferImageGranularity) IsEnabled() bool {
 	return g.bufferImageGranularity > MaxLowBufferImageGranularity
 }
 
-func (g *BlockBufferImageGranularity) getStartSlot(offset int) int {
+func (g *blockBufferImageGranularity) getStartSlot(offset int) int {
 	return g.offsetToRegionIndex(offset & int(^(g.bufferImageGranularity - 1)))
 }
 
-func (g *BlockBufferImageGranularity) getEndSlot(offset int, size int) int {
+func (g *blockBufferImageGranularity) getEndSlot(offset int, size int) int {
 	return g.offsetToRegionIndex((offset + size - 1) & int(^(g.bufferImageGranularity - 1)))
 }
 
-func (g *BlockBufferImageGranularity) offsetToRegionIndex(offset int) int {
+func (g *blockBufferImageGranularity) offsetToRegionIndex(offset int) int {
 	return offset >> (63 - bits.LeadingZeros64(uint64(g.bufferImageGranularity)))
 }

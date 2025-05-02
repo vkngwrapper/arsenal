@@ -2,6 +2,12 @@ package vam
 
 import (
 	"fmt"
+	"math"
+	"sort"
+	"strconv"
+	"sync"
+	"unsafe"
+
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
@@ -16,11 +22,6 @@ import (
 	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
 	"golang.org/x/exp/slog"
-	"math"
-	"sort"
-	"strconv"
-	"sync"
-	"unsafe"
 )
 
 var blockPool = sync.Pool{
@@ -239,7 +240,7 @@ func (l *memoryBlockList) IsCorruptionDetectionEnabled() bool {
 		l.deviceMemory.MemoryTypeProperties(l.memoryTypeIndex).PropertyFlags&requiredMemFlags == requiredMemFlags
 }
 
-func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *AllocationCreateInfo, suballocType SuballocationType, allocations []Allocation) (res common.VkResult, err error) {
+func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *AllocationCreateInfo, suballocType suballocationType, allocations []Allocation) (res common.VkResult, err error) {
 	if l.minAllocationAlignment > alignment {
 		alignment = l.minAllocationAlignment
 	}
@@ -277,7 +278,7 @@ func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *Allocat
 	return res, err
 }
 
-func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *AllocationCreateInfo, suballocType SuballocationType, allocs []Allocation) (res common.VkResult, err error) {
+func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *AllocationCreateInfo, suballocType suballocationType, allocs []Allocation) (res common.VkResult, err error) {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
 
@@ -306,7 +307,7 @@ func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *Alloc
 	return core1_0.VKSuccess, nil
 }
 
-func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *AllocationCreateInfo, suballocationType SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
+func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *AllocationCreateInfo, suballocationType suballocationType, outAlloc *Allocation) (common.VkResult, error) {
 	isUpperAddress := createInfo.Flags&AllocationCreateUpperAddress != 0
 
 	var res common.VkResult
@@ -614,7 +615,7 @@ func (l *memoryBlockList) calcMaxBlockSize() int {
 	return result
 }
 
-func (l *memoryBlockList) allocFromBlock(block *deviceMemoryBlock, size int, alignment uint, allocFlags AllocationCreateFlags, userData any, suballocType SuballocationType, flags AllocationCreateFlags, outAlloc *Allocation) (common.VkResult, error) {
+func (l *memoryBlockList) allocFromBlock(block *deviceMemoryBlock, size int, alignment uint, allocFlags AllocationCreateFlags, userData any, suballocType suballocationType, flags AllocationCreateFlags, outAlloc *Allocation) (common.VkResult, error) {
 	isUpperAddress := allocFlags&AllocationCreateUpperAddress != 0
 
 	var strategy metadata.AllocationStrategy
@@ -638,7 +639,7 @@ func (l *memoryBlockList) allocFromBlock(block *deviceMemoryBlock, size int, ali
 	return l.commitAllocationRequest(currRequest, block, alignment, allocFlags, userData, suballocType, outAlloc)
 }
 
-func (l *memoryBlockList) commitAllocationRequest(allocRequest metadata.AllocationRequest, block *deviceMemoryBlock, alignment uint, allocFlags AllocationCreateFlags, userData any, suballocType SuballocationType, outAlloc *Allocation) (common.VkResult, error) {
+func (l *memoryBlockList) commitAllocationRequest(allocRequest metadata.AllocationRequest, block *deviceMemoryBlock, alignment uint, allocFlags AllocationCreateFlags, userData any, suballocType suballocationType, outAlloc *Allocation) (common.VkResult, error) {
 	mapped := allocFlags&AllocationCreateMapped != 0
 	isMappingAllowed := allocFlags&(AllocationCreateHostAccessSequentialWrite|AllocationCreateHostAccessRandom) != 0
 
@@ -779,7 +780,7 @@ func (l *memoryBlockList) CommitDefragAllocationRequest(allocRequest metadata.Al
 		alignment,
 		AllocationCreateFlags(flags),
 		userData,
-		SuballocationType(suballocType),
+		suballocationType(suballocType),
 		outAlloc,
 	)
 }

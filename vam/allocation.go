@@ -3,6 +3,8 @@ package vam
 import (
 	cerrors "errors"
 	"fmt"
+	"unsafe"
+
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
@@ -12,7 +14,6 @@ import (
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
 	"github.com/vkngwrapper/extensions/v2/khr_buffer_device_address"
-	"unsafe"
 )
 
 // ErrAllocationAlreadyFreed is an error that is wrapped and returned when carrying out device-memory-accessing
@@ -82,7 +83,7 @@ type Allocation struct {
 
 	memoryTypeIndex   int
 	allocationType    allocationType
-	suballocationType SuballocationType
+	suballocationType suballocationType
 	memory            *vulkan.SynchronizedMemory
 
 	parentAllocator *Allocator
@@ -121,7 +122,7 @@ func (a *Allocation) initBlockAllocation(
 	alignment uint,
 	size int,
 	memoryTypeIndex int,
-	suballocationType SuballocationType,
+	suballocationType suballocationType,
 	mapped bool,
 ) {
 	if a.allocationType != 0 {
@@ -150,7 +151,7 @@ func (a *Allocation) initDedicatedAllocation(
 	parentPool *Pool,
 	memoryTypeIndex int,
 	memory *vulkan.SynchronizedMemory,
-	suballocationType SuballocationType,
+	suballocationType suballocationType,
 	size int,
 ) {
 	if a.allocationType != 0 {

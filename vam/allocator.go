@@ -2,6 +2,11 @@ package vam
 
 import (
 	"fmt"
+	"math"
+	"math/bits"
+	"strconv"
+	"unsafe"
+
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
@@ -18,10 +23,6 @@ import (
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
 	"github.com/vkngwrapper/extensions/v2/khr_maintenance4"
 	"golang.org/x/exp/slog"
-	"math"
-	"math/bits"
-	"strconv"
-	"unsafe"
 )
 
 const (
@@ -397,7 +398,7 @@ func (a *Allocator) calculateMemoryTypeParameters(
 func (a *Allocator) allocateDedicatedMemoryPage(
 	pool *Pool,
 	size int,
-	suballocationType SuballocationType,
+	suballocationType suballocationType,
 	memoryTypeIndex int,
 	allocInfo core1_0.MemoryAllocateInfo,
 	doMap, isMappingAllowed bool,
@@ -445,7 +446,7 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 func (a *Allocator) allocateDedicatedMemory(
 	pool *Pool,
 	size int,
-	suballocationType SuballocationType,
+	suballocationType suballocationType,
 	dedicatedAllocations *dedicatedAllocationList,
 	memoryTypeIndex int,
 	doMap, isMappingAllowed, canAliasMemory bool,
@@ -575,7 +576,7 @@ func (a *Allocator) allocateMemoryOfType(
 	dedicatedBufferOrImageUsage *uint32,
 	createInfo *AllocationCreateInfo,
 	memoryTypeIndex int,
-	suballocationType SuballocationType,
+	suballocationType suballocationType,
 	dedicatedAllocations *dedicatedAllocationList,
 	blockAllocations *memoryBlockList,
 	allocations []Allocation,
@@ -706,7 +707,7 @@ func (a *Allocator) multiAllocateMemory(
 	dedicatedImage core1_0.Image,
 	dedicatedBufferOrImageUsage *uint32,
 	options *AllocationCreateInfo,
-	suballocType SuballocationType,
+	suballocType suballocationType,
 	outAllocations []Allocation,
 ) (common.VkResult, error) {
 	err := memutils.CheckPow2(memoryRequirements.Alignment, "core1_0.MemoryRequirements.Alignment")

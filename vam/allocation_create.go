@@ -4,6 +4,8 @@ import (
 	"github.com/vkngwrapper/core/v2/core1_0"
 )
 
+// MemoryUsage is an enum passed to the Usage field of AllocationCreateInfo to
+// indicate how memory types are to be selected for the allocation in question.
 type MemoryUsage uint32
 
 const (
@@ -26,24 +28,24 @@ const (
 	//
 	// Allocations with this usage are always created as dedicated - it implies AllocationCreateDedicatedMemory
 	MemoryUsageGPULazilyAllocated
-	// MemoryUsageAuto selects the best memory type automatically. This flag is recommended for most
+	// MemoryUsageAuto selects the best memory type automatically. This value is recommended for most
 	// common use cases.
 	//
-	// When using this flag, if you want to map the allocation, you must pass one of the flags
+	// When using this value, if you want to map the allocation, you must pass one of the flags
 	// AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom in AllocationCreateInfo.Flags
 	//
 	// It can be used only with functions indicate a Buffer or Image and not with generic memory allocation
 	// functions.
 	MemoryUsageAuto
 	// MemoryUsageAutoPreferDevice selects the best memory type automatically with preference for GPU (device)
-	// memory. When using this flag, if you want to map the allocation, you must pass one of the flags
+	// memory. When using this value, if you want to map the allocation, you must pass one of the flags
 	// AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom in AllocationCreateInfo.Flags
 	//
 	// It can be used only with functions indicate a Buffer or Image and not with generic memory allocation
 	// functions.
 	MemoryUsageAutoPreferDevice
 	// MemoryUsageAutoPreferHost selects the best memory type automatically with preference for CPU (host)
-	// memory. When using this flag, if you want to map the allocation, you must pass one of the flags
+	// memory. When using this value, if you want to map the allocation, you must pass one of the flags
 	// AllocationCreateHostAccessSequentialWrite or AllocationCreateHostAccessRandom in AllocationCreateInfo.Flags
 	//
 	// It can be used only with functions indicate a Buffer or Image and not with generic memory allocation

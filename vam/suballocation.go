@@ -1,9 +1,9 @@
 package vam
 
-type SuballocationType uint32
+type suballocationType uint32
 
 const (
-	SuballocationFree SuballocationType = iota
+	SuballocationFree suballocationType = iota
 	SuballocationUnknown
 	SuballocationBuffer
 	SuballocationImageUnknown
@@ -11,7 +11,7 @@ const (
 	SuballocationImageOptimal
 )
 
-var suballocationTypeMapping = map[SuballocationType]string{
+var suballocationTypeMapping = map[suballocationType]string{
 	SuballocationFree:         "SuballocationFree",
 	SuballocationUnknown:      "SuballocationUnknown",
 	SuballocationBuffer:       "SuballocationBuffer",
@@ -20,7 +20,7 @@ var suballocationTypeMapping = map[SuballocationType]string{
 	SuballocationImageOptimal: "SuballocationImageOptimal",
 }
 
-func (s SuballocationType) String() string {
+func (s suballocationType) String() string {
 	str, ok := suballocationTypeMapping[s]
 	if !ok {
 		return "unknown SuballocationType"

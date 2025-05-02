@@ -2,6 +2,7 @@ package vam
 
 import (
 	"fmt"
+
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
@@ -20,7 +21,7 @@ type deviceMemoryBlock struct {
 
 	metadata           metadata.BlockMetadata
 	deviceMemory       *vulkan.DeviceMemoryProperties
-	granularityHandler BlockBufferImageGranularity
+	granularityHandler blockBufferImageGranularity
 }
 
 func (b *deviceMemoryBlock) Init(
