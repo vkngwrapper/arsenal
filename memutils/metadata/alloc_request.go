@@ -38,9 +38,15 @@ type AllocationRequest struct {
 	// Size the total size of the allocation, maybe larger than what was originally requested
 	Size int
 	// Item is a Suballocation object indicating basic information about the allocation
-	Item Suballocation
-	// CustomData
-	CustomData    uint32
+	Item suballocation
+	// Type identifies the sort of allocation this request represents (and can be used
+	// to identify the BlockMetadata implementation used to generate this request).
+	Type AllocationRequestType
+
+	// AllocType is the value passed into CreateAllocationRequest by the consumer to generate
+	// this request
+	AllocType uint32
+	// AlgorithmData is arbitrary data used by the BlockMetadata implementation for internal
+	// purposes
 	AlgorithmData uint64
-	Type          AllocationRequestType
 }

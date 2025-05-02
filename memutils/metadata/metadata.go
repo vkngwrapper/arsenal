@@ -1,10 +1,11 @@
 package metadata
 
 import (
+	"unsafe"
+
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/driver"
-	"unsafe"
 )
 
 // BlockMetadata represents a single large allocation of memory within some system. It manages
@@ -46,7 +47,7 @@ type BlockMetadata interface {
 	//
 	// This method is used by memutils.defrag to very rapidly determine whether it can ignore blocks when
 	// trying to reposition allocations. As a result, the most important requirement for the implementation
-	// is that this method be fast and not produce false negatives. False positives are ok, but ideal performance
+	// is that this method be fast and not produce false negatives. False positives are ok, but ideal defrag performance
 	// requires that this method balance runtime with the likelihood of false positives.
 	//
 	// It is completely acceptable for consumers to use this method for the same purpose as memutils.defrag
@@ -78,7 +79,7 @@ type BlockMetadata interface {
 	// (allocated or free) within the block and returns the offset in bytes within the block for that
 	// region of memory.
 	//
-	// The implementation must return an error if the provided handle does not map to a live region of
+	// The implementation may return an error if the provided handle does not map to a live region of
 	// memory within this block.
 	AllocationOffset(allocHandle BlockAllocationHandle) (int, error)
 	// AllocationUserData accepts a BlockAllocationHandle that maps to a live allocation within the block
@@ -101,7 +102,7 @@ type BlockMetadata interface {
 	// provided memutils.Statistics object.
 	AddStatistics(stats *memutils.Statistics)
 
-	// Clear instantly frees all allocations and
+	// Clear instantly frees all allocations and and resets the state of the metadata
 	Clear()
 	// BlockJsonData populates a json object with information about this block
 	BlockJsonData(json jwriter.ObjectState)

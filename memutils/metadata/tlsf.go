@@ -2,22 +2,23 @@ package metadata
 
 import (
 	"fmt"
-	"github.com/dolthub/swiss"
-	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
-	"github.com/pkg/errors"
-	"github.com/vkngwrapper/arsenal/memutils"
 	"math"
 	"math/bits"
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/dolthub/swiss"
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/pkg/errors"
+	"github.com/vkngwrapper/arsenal/memutils"
 )
 
 const (
-	SmallBufferSize        = 256
-	SecondLevelIndex uint8 = 5
-	MemoryClassShift       = 7
-	MaxMemoryClasses       = 65 - MemoryClassShift
+	smallBufferSize        = 256
+	secondLevelIndex uint8 = 5
+	memoryClassShift       = 7
+	maxMemoryClasses       = 65 - memoryClassShift
 )
 
 var blockAllocator = sync.Pool{
@@ -51,6 +52,10 @@ func (b *tlsfBlock) IsFree() bool {
 	return b.prevFree != b
 }
 
+// TLSFBLockMetadata is a BlockMetadata implementation of the two-level segregated
+// fit algorithm, seen here: http://www.gii.upv.es/tlsf/
+//
+// TLSF is a general-purpose random-access memory allocator that is both fast and efficient.
 type TLSFBlockMetadata struct {
 	BlockMetadataBase
 
@@ -59,7 +64,7 @@ type TLSFBlockMetadata struct {
 	blocksFreeSize    int
 	isFreeBitmap      uint32
 	memoryClasses     int
-	innerIsFreeBitmap [MaxMemoryClasses]uint32
+	innerIsFreeBitmap [maxMemoryClasses]uint32
 
 	nextAllocationHandle atomic.Uint64
 	handleKey            *swiss.Map[BlockAllocationHandle, *tlsfBlock]
@@ -70,6 +75,8 @@ type TLSFBlockMetadata struct {
 
 var _ BlockMetadata = &TLSFBlockMetadata{}
 
+// NewTLSFBlockMetadata creates a new TLSFBlockMetadata using granularity properties. The
+// properties are passed to NewBlockMetadata.
 func NewTLSFBlockMetadata(bufferImageGranularity int, granularityHandler GranularityCheck) *TLSFBlockMetadata {
 	return &TLSFBlockMetadata{
 		BlockMetadataBase: NewBlockMetadata(bufferImageGranularity, granularityHandler),
@@ -103,6 +110,7 @@ func (m *TLSFBlockMetadata) getBlock(handle BlockAllocationHandle) (*tlsfBlock, 
 	return block, nil
 }
 
+// Init prepares this structure for allocations and sizes the block in bytes based on the parameter size.
 func (m *TLSFBlockMetadata) Init(size int) {
 	m.BlockMetadataBase.Init(size)
 	m.handleKey = swiss.NewMap[BlockAllocationHandle, *tlsfBlock](42)
@@ -115,7 +123,7 @@ func (m *TLSFBlockMetadata) Init(size int) {
 	sli := m.sizeToSecondIndex(size, memoryClass)
 
 	listSize := 1
-	sliMask := int(uint(1) << SecondLevelIndex)
+	sliMask := int(uint(1) << secondLevelIndex)
 	if memoryClass != 0 {
 		listSize = int(memoryClass-1)*sliMask + int(sli+1)
 	}
@@ -126,6 +134,9 @@ func (m *TLSFBlockMetadata) Init(size int) {
 	m.freeList = make([]*tlsfBlock, listSize)
 }
 
+// Validate performs internal consistency checks on the metadata. These checks may be expensive, depending
+// on the implementation. When the implementation is functioning correctly, it should not be possible
+// for this method to return an error, but this may assist in diagnosing issues with the implementation.
 func (m *TLSFBlockMetadata) Validate() error {
 	if m.SumFreeSize() > m.Size() {
 		return errors.New("invalid metadata free size")
@@ -233,10 +244,15 @@ func (m *TLSFBlockMetadata) Validate() error {
 	return nil
 }
 
+// SupportsRandomAccess returns a boolean indicating whether the implementation allows allocations
+// to be made in arbitrary sections of the managed block.  This implementation always returns
+// true.
 func (m *TLSFBlockMetadata) SupportsRandomAccess() bool {
 	return true
 }
 
+// AddDetailedStatistics sums this block's allocation statistics into the statistics currently present
+// in the provided memutils.DetailedStatistics object.
 func (m *TLSFBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStatistics) {
 	stats.BlockCount++
 	stats.BlockBytes += m.size
@@ -253,6 +269,8 @@ func (m *TLSFBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStatis
 	}
 }
 
+// AddStatistics sums this block's allocation statistics into the statistics currently present in the
+// provided memutils.Statistics object.
 func (m *TLSFBlockMetadata) AddStatistics(stats *memutils.Statistics) {
 	stats.BlockCount++
 	stats.AllocationCount += m.allocCount
@@ -271,31 +289,41 @@ func (m *TLSFBlockMetadata) getListIndex(memoryClass uint8, secondIndex uint16) 
 		return int(secondIndex)
 	}
 
-	i := uint32(memoryClass-1)*uint32(uint(1)<<SecondLevelIndex) + uint32(secondIndex)
+	i := uint32(memoryClass-1)*uint32(uint(1)<<secondLevelIndex) + uint32(secondIndex)
 
 	return int(i) + 4
 }
 
+// AllocationCount returns the number of suballocations currently live in the implementation. This number
+// should generally be the number of successful allocations minus the number of successful frees.
 func (m *TLSFBlockMetadata) AllocationCount() int {
 	return m.allocCount
 }
 
+// FreeRegionsCount returns the number of unique regions of free memory in the block.
+// That means all the free segments between allocations and the big free block at the end.
 func (m *TLSFBlockMetadata) FreeRegionsCount() int {
-	return m.blocksFreeSize + m.nullBlock.size
+	var hasNullBlock int
+	if m.nullBlock.size > 0 {
+		hasNullBlock = 1
+	}
+	return m.blocksFreeCount + hasNullBlock
 }
 
+// SumFreeSize returns the number of free bytes of memory in the block.
 func (m *TLSFBlockMetadata) SumFreeSize() int {
 	return m.blocksFreeSize + m.nullBlock.size
 }
 
+// IsEmpty will return true if this block has no live suballocations
 func (m *TLSFBlockMetadata) IsEmpty() bool {
 	return m.nullBlock.offset == 0
 }
 
 func (m *TLSFBlockMetadata) sizeToMemoryClass(size int) uint8 {
-	if size > SmallBufferSize {
+	if size > smallBufferSize {
 		mostSignificantBit := uint8(63 - bits.LeadingZeros64(uint64(size)))
-		return mostSignificantBit - MemoryClassShift
+		return mostSignificantBit - memoryClassShift
 	}
 
 	return 0
@@ -303,8 +331,8 @@ func (m *TLSFBlockMetadata) sizeToMemoryClass(size int) uint8 {
 
 func (m *TLSFBlockMetadata) sizeToSecondIndex(size int, memoryClass uint8) uint16 {
 	if memoryClass != 0 {
-		mask := uint(1) << SecondLevelIndex
-		indexVal := uint(size) >> (memoryClass + MemoryClassShift - SecondLevelIndex)
+		mask := uint(1) << secondLevelIndex
+		indexVal := uint(size) >> (memoryClass + memoryClassShift - secondLevelIndex)
 		return uint16(indexVal ^ mask)
 	}
 
@@ -315,12 +343,12 @@ func (m *TLSFBlockMetadata) sizeForNextList(allocSize int) int {
 	// Round up to the next block
 	sizeForNextList := allocSize
 
-	smallSizeStep := SmallBufferSize / 4
-	if allocSize > SmallBufferSize {
+	smallSizeStep := smallBufferSize / 4
+	if allocSize > smallBufferSize {
 		mostSignificantBit := 63 - bits.LeadingZeros64(uint64(allocSize))
-		sizeForNextList += int(uint(1) << (mostSignificantBit - int(SecondLevelIndex)))
-	} else if allocSize > SmallBufferSize-smallSizeStep {
-		sizeForNextList = SmallBufferSize + 1
+		sizeForNextList += int(uint(1) << (mostSignificantBit - int(secondLevelIndex)))
+	} else if allocSize > smallBufferSize-smallSizeStep {
+		sizeForNextList = smallBufferSize + 1
 	} else {
 		sizeForNextList += smallSizeStep
 	}
@@ -328,6 +356,20 @@ func (m *TLSFBlockMetadata) sizeForNextList(allocSize int) int {
 	return sizeForNextList
 }
 
+// MayHaveFreeBlock should return a heuristic indicating whether the block could possibly support a new
+// allocation of the provided type and size. allocType is a value that has meaning within the memory
+// system consuming BlockMetadata. The implementation may or may not care, and could potentially pass
+// the value back to some callback or interface provided by the consumer. The size parameter is the size
+// in bytes of the hypothetical allocation.
+//
+// This method is used by memutils.defrag to very rapidly determine whether it can ignore blocks when
+// trying to reposition allocations. As a result, the most important requirement for the implementation
+// is that this method be fast and not produce false negatives. False positives are ok, but ideal defrag performance
+// requires that this method balance runtime with the likelihood of false positives.
+//
+// It is completely acceptable for consumers to use this method for the same purpose as memutils.defrag
+// (determine whether a block can be ignored while attempting to rapidly make allocations of a particular
+// size).
 func (m *TLSFBlockMetadata) MayHaveFreeBlock(allocType uint32, size int) bool {
 	if m.nullBlock.size >= size {
 		return true
@@ -343,6 +385,24 @@ func (m *TLSFBlockMetadata) MayHaveFreeBlock(allocType uint32, size int) bool {
 	return freeMap != 0
 }
 
+// CreateAllocationRequest retrieves an AllocationRequest object indicating where and how the implementation
+// would prefer to allocate the requested memory. That object can be passed to Alloc to commit the
+// allocation.
+//
+// allocSize - the size in bytes of the requested allocation
+// allocAlignment - the minimum alignment of the requested allocation. The implementation may increase
+// the alignment above this value, but may not reduce it below this value
+// upperAddress - In implementations that split the memory block into two tranches (such as
+// LinearBlockMetadata and its double stack mode), this parameter indicates that the allocation should
+// be made in the upper tranch if true. When there is only a single tranch of memory in the implementation,
+// the implementation should return an error when this argument is true.
+// allocType - Memory-system-dependent allocation type value. The consumer may care about this.
+// Implementations usually have a consumer-provided "granularity handler" which may care about this.
+// strategy - Whether to prioritize memory usage, memory offset, or allocation speed when choosing
+// a place for the requested allocation.
+// maxOffset - This parameter should usually be math.MaxInt. The requested allocation must fail
+// if the allocation cannot be placed at an offset before the provided maxOffset. This is primarily
+// used by memutils.defrag to make relocating an allocation within a block more performant.
 func (m *TLSFBlockMetadata) CreateAllocationRequest(
 	allocSize int, allocAlignment uint,
 	upperAddress bool,
@@ -582,7 +642,7 @@ func (m *TLSFBlockMetadata) checkBlock(
 	allocRequest.Type = AllocationRequestTLSF
 	allocRequest.BlockAllocationHandle = block.blockHandle
 	allocRequest.Size = allocSize - memutils.DebugMargin
-	allocRequest.CustomData = allocType
+	allocRequest.AllocType = allocType
 	allocRequest.AlgorithmData = uint64(alignedOffset)
 
 	// Place block at the start of list if it's a normal block
@@ -631,6 +691,7 @@ func (m *TLSFBlockMetadata) findFreeBlock(size int) (*tlsfBlock, int) {
 	return m.freeList[listIndex], listIndex
 }
 
+// BlockJsonData populates a json object with information about this block
 func (m *TLSFBlockMetadata) BlockJsonData(json jwriter.ObjectState) {
 	blockCount := m.allocCount + m.blocksFreeCount
 	blockList := make([]*tlsfBlock, blockCount)
@@ -652,6 +713,19 @@ func (m *TLSFBlockMetadata) BlockJsonData(json jwriter.ObjectState) {
 	m.WriteBlockJson(json, stats.BlockBytes-stats.AllocationBytes, stats.AllocationCount, stats.UnusedRangeCount)
 }
 
+// CheckCorruption accepts a pointer to the underlying memory that this block manages. It will return
+// nil if anti-corruption memory markers are present for every suballocation in the block. This method
+// is fairly expensive and so should only be run as part of some sort of diagnostic regime.
+//
+// Bear in mind that anti-corruption memory markers are only written when memutils is built with
+// the build flag `debug_mem_utils`. This method will not return an error when that flag is not present,
+// but it is expensive regardless of build flags and so should only be run when mem_utils.DebugMargin
+// is not 0.
+//
+// Additionally, it is the responsibility of consumers to write the debug markers themselves after
+// allocation, by calling memutils.WriteMagicValue with the same pointer sent to CheckCorruption.
+// If the consumer has failed to write the anti-corruption markers, then this method will return an
+// error.
 func (m *TLSFBlockMetadata) CheckCorruption(blockData unsafe.Pointer) error {
 	for block := m.nullBlock.prevPhysical; block != nil; block = block.prevPhysical {
 		if !block.IsFree() {
@@ -664,6 +738,10 @@ func (m *TLSFBlockMetadata) CheckCorruption(blockData unsafe.Pointer) error {
 	return nil
 }
 
+// Alloc commits an AllocationRequest object, creating the suballocation within the block based
+// on the data described in the AllocationRequest. The implementation must return an error if the
+// allocation is no longer valid- i.e. the requested free region no longer exists, is not free,
+// offset has changed, is no longer large enough to support the request, etc.
 func (m *TLSFBlockMetadata) Alloc(req AllocationRequest, suballocType uint32, userData any) error {
 	if req.Type != AllocationRequestTLSF {
 		return errors.New("allocation request was received by an incompatible metadata")
@@ -780,12 +858,16 @@ func (m *TLSFBlockMetadata) Alloc(req AllocationRequest, suballocType uint32, us
 		m.insertFreeBlock(newBlock)
 	}
 
-	m.granularityHandler.AllocRegions(req.CustomData, currentBlock.offset, currentBlock.size)
+	m.granularityHandler.AllocRegions(req.AllocType, currentBlock.offset, currentBlock.size)
 	m.allocCount++
 
 	return nil
 }
 
+// Free frees a suballocation within the block, causing it to become a free region once again.
+//
+// The implementation must return an error if the provided handle does not map to a live allocation
+// within this block.
 func (m *TLSFBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 	block, err := m.getBlock(allocHandle)
 	if err != nil {
@@ -917,6 +999,9 @@ func (m *TLSFBlockMetadata) mergeBlock(block *tlsfBlock, prev *tlsfBlock) {
 	m.freeBlock(prev)
 }
 
+// VisitAllRegions will call the provided callback once for each allocation and free region in
+// the block.  Depending on implementation, this can be extremely slow and should generally not
+// be done except for diagnostic purposes.
 func (m *TLSFBlockMetadata) VisitAllRegions(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error) error {
 	for block := m.nullBlock; block != nil; block = block.prevPhysical {
 		err := handleBlock(block.blockHandle, block.offset, block.size, block.userData, block.IsFree())
@@ -928,6 +1013,8 @@ func (m *TLSFBlockMetadata) VisitAllRegions(handleBlock func(handle BlockAllocat
 	return nil
 }
 
+// AllocationListBegin will retrieve the handle very first allocation in the block, if any. If none exist, the
+// BlockAllocationHandle value NoAllocation will be returned.
 func (m *TLSFBlockMetadata) AllocationListBegin() (BlockAllocationHandle, error) {
 	if m.allocCount == 0 {
 		return NoAllocation, nil
@@ -942,6 +1029,11 @@ func (m *TLSFBlockMetadata) AllocationListBegin() (BlockAllocationHandle, error)
 	panic("the metadata has an allocation but none could be found in the physical blocks")
 }
 
+// FindNextAllocation accepts a BlockAllocationHandle that maps to a live allocation within the block
+// and returns the handle for the next live allocation within the block, if any. If none exist, the
+// BlockAllocationHandle value NoAllocation will be returned.
+//
+// The implementation must return an error if the provided allocHandle does not map to a live allocation within this block.
 func (m *TLSFBlockMetadata) FindNextAllocation(alloc BlockAllocationHandle) (BlockAllocationHandle, error) {
 	startBlock, err := m.getBlock(alloc)
 	if err != nil {
@@ -960,6 +1052,7 @@ func (m *TLSFBlockMetadata) FindNextAllocation(alloc BlockAllocationHandle) (Blo
 	return NoAllocation, nil
 }
 
+// Clear instantly frees all allocations and and resets the state of the metadata
 func (m *TLSFBlockMetadata) Clear() {
 	m.allocCount = 0
 	m.blocksFreeCount = 0
@@ -978,10 +1071,16 @@ func (m *TLSFBlockMetadata) Clear() {
 	}
 
 	m.freeList = make([]*tlsfBlock, len(m.freeList))
-	m.innerIsFreeBitmap = [MaxMemoryClasses]uint32{}
+	m.innerIsFreeBitmap = [maxMemoryClasses]uint32{}
 	m.granularityHandler.Clear()
 }
 
+// AllocationOffset accepts a BlockAllocationHandle that maps to a live region of memory
+// (allocated or free) within the block and returns the offset in bytes within the block for that
+// region of memory.
+//
+// An error will be returned if the provided handle does not map to a live region of
+// memory within this block.
 func (m *TLSFBlockMetadata) AllocationOffset(allocHandle BlockAllocationHandle) (int, error) {
 	block, err := m.getBlock(allocHandle)
 	if err != nil {
@@ -991,6 +1090,11 @@ func (m *TLSFBlockMetadata) AllocationOffset(allocHandle BlockAllocationHandle) 
 	return block.offset, nil
 }
 
+// AllocationUserData accepts a BlockAllocationHandle that maps to a live allocation within the block
+// and returns the userdata value provided by the consumer for that allocation.
+//
+// An error will be returned if the provided handle does not map to a live allocation
+// within this block.
 func (m *TLSFBlockMetadata) AllocationUserData(allocHandle BlockAllocationHandle) (any, error) {
 	block, err := m.getBlock(allocHandle)
 	if err != nil {
@@ -1004,6 +1108,11 @@ func (m *TLSFBlockMetadata) AllocationUserData(allocHandle BlockAllocationHandle
 	return block.userData, nil
 }
 
+// SetAllocationUserData accepts a BlockAllocationHandle that maps to a live allocation within the
+// block and a userData value. The allocation's userData is changed to the provided userData.
+//
+// An error will be returned if the provided handle does not map to a live allocation
+// within this block.
 func (m *TLSFBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationHandle, userData any) error {
 	block, err := m.getBlock(allocHandle)
 	if err != nil {

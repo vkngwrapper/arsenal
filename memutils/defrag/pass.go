@@ -2,6 +2,8 @@ package defrag
 
 import "fmt"
 
+// PassContext is an object used to track data for the current defragmentation
+// pass across multiple relocations
 type PassContext struct {
 	// MaxPassBytes is the maximum number of bytes to relocate in each pass. There is no guarantee that
 	// this many bytes will actually be relocated in any given pass, based on how easy it is to find additional
@@ -13,8 +15,10 @@ type PassContext struct {
 	// made for each pass, so managing this and MaxPassBytes can help you control memory and cpu throughput of the
 	// defragmentation process.
 	MaxPassAllocations int
-	Stats              DefragmentationStats
-	ignoredAllocs      int
+	// Stats contains statistics for the current pass, such as bytes moved,
+	// allocations performed, etc.
+	Stats         DefragmentationStats
+	ignoredAllocs int
 }
 
 const defragMaxAllocsToIgnore = 16

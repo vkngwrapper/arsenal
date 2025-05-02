@@ -2,40 +2,58 @@ package metadata
 
 import (
 	"fmt"
-	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
-	"github.com/pkg/errors"
-	"github.com/vkngwrapper/arsenal/memutils"
 	"math"
 	"sort"
 	"unsafe"
+
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
+	"github.com/pkg/errors"
+	"github.com/vkngwrapper/arsenal/memutils"
 )
 
-type SecondVectorMode uint32
+type secondVectorMode uint32
 
 const (
-	SecondVectorModeEmpty SecondVectorMode = iota
+	SecondVectorModeEmpty secondVectorMode = iota
 	SecondVectorModeRingBuffer
 	SecondVectorModeDoubleStack
 )
 
-var secondVectorModeMapping = map[SecondVectorMode]string{
+var secondVectorModeMapping = map[secondVectorMode]string{
 	SecondVectorModeEmpty:       "SecondVectorModeEmpty",
 	SecondVectorModeRingBuffer:  "SecondVectorModeRingBuffer",
 	SecondVectorModeDoubleStack: "SecondVectorModeDoubleStack",
 }
 
-func (m SecondVectorMode) String() string {
+func (m secondVectorMode) String() string {
 	return secondVectorModeMapping[m]
 }
 
+// LinearBlockMetadata is a BlockMetadata implementation that represents a simple
+// vector memory arena.
+//
+// The LinearBlockMetadata has three operation modes:
+//   - Stack, which is the default.  Allocations will be applied to the end of the
+//     current block.  Deallocations will only free up space for new allocations when
+//     taken from the end of the allocation.
+//   - Double stack, which the metadata will switch to when it's in stack mode and
+//     and a new allocation with upperAddress=true is requested. The metadata functions
+//     like two stacks, with the second one allocated to with upperAddress=true
+//   - Ring buffer, which the metadata will switch to if the stack grows large enough
+//     to fill the main stack without transitioning to a double stack.  Ring buffers
+//     operate like a double stack except that the consumer cannot choose which stack
+//     to add new allocations to.  Instead, allocations will be added to the first
+//     stack if the fit and second stack if they don't.  If a deallocation causes the entire
+//     first stack to be freed, the stacks will be swapped with the empty stack becoming
+//     the second stack.
 type LinearBlockMetadata struct {
 	BlockMetadataBase
 
 	sumFreeSize      int
-	suballocations0  []Suballocation
-	suballocations1  []Suballocation
+	suballocations0  []suballocation
+	suballocations1  []suballocation
 	firstVectorIndex int
-	secondVectorMode SecondVectorMode
+	secondVectorMode secondVectorMode
 
 	// Number of items in the first vector with nil allocations at the beginning
 	firstNullItemsBeginCount int
@@ -47,34 +65,52 @@ type LinearBlockMetadata struct {
 
 var _ BlockMetadata = &LinearBlockMetadata{}
 
+// NewLinearBlockMetadata creates a new LinearBlockMetadata from granularity properties.
+// The granularity properties are passed to NewBlockMetadata.
 func NewLinearBlockMetadata(bufferImageGranularity int, granularityHandler GranularityCheck) *LinearBlockMetadata {
 	return &LinearBlockMetadata{
 		BlockMetadataBase: NewBlockMetadata(bufferImageGranularity, granularityHandler),
 		secondVectorMode:  SecondVectorModeEmpty,
-		suballocations0:   []Suballocation{},
-		suballocations1:   []Suballocation{},
+		suballocations0:   []suballocation{},
+		suballocations1:   []suballocation{},
 	}
 }
 
+// SumFreeSize returns the number of free bytes of memory in the block.
 func (m *LinearBlockMetadata) SumFreeSize() int {
 	return m.sumFreeSize
 }
 
+// IsEmpty will return true if this block has no live suballocations
 func (m *LinearBlockMetadata) IsEmpty() bool {
 	return m.AllocationCount() == 0
 }
 
+// SupportsRandomAccess returns a boolean indicating whether the implementation allows allocations
+// to be made in arbitrary sections of the managed block, or whether the implementation demands
+// that allocation offsets be deterministic. The LinearBlockMetadata implementation always returns
+// false.
 func (m *LinearBlockMetadata) SupportsRandomAccess() bool { return false }
 
+// AllocationOffset accepts a BlockAllocationHandle that maps to a live region of memory
+// (allocated or free) within the block and returns the offset in bytes within the block for that
+// region of memory.
+//
+// The implementation may return an error if the provided handle does not map to a live region of
+// memory within this block.
 func (m *LinearBlockMetadata) AllocationOffset(allocHandle BlockAllocationHandle) (int, error) {
 	return int(allocHandle) - 1, nil
 }
 
+// Init prepares this structure for allocations and sizes the block in bytes based on the parameter size.
 func (m *LinearBlockMetadata) Init(size int) {
 	m.BlockMetadataBase.Init(size)
 	m.sumFreeSize = size
 }
 
+// Validate performs internal consistency checks on the metadata. These checks may be expensive, depending
+// on the implementation. When the implementation is functioning correctly, it should not be possible
+// for this method to return an error, but this may assist in diagnosing issues with the implementation.
 func (m *LinearBlockMetadata) Validate() error {
 	firstVector := *m.accessSuballocationsFirst()
 	secondVector := *m.accessSuballocationsSecond()
@@ -195,6 +231,8 @@ func (m *LinearBlockMetadata) Validate() error {
 	return nil
 }
 
+// AllocationCount returns the number of suballocations currently live in the implementation. This number
+// should generally be the number of successful allocations minus the number of successful frees.
 func (m *LinearBlockMetadata) AllocationCount() int {
 	first := *m.accessSuballocationsFirst()
 	second := *m.accessSuballocationsSecond()
@@ -202,11 +240,17 @@ func (m *LinearBlockMetadata) AllocationCount() int {
 	return len(first) - m.firstNullItemsBeginCount - m.firstNullItemsMiddleCount + len(second) - m.secondNullItemsCount
 }
 
+// FreeRegionsCount is supposed to return the number of unique regions of free memory in the block,
+// for defragmentation.  LinearBlockMetadata cannot be defragmented, though, so this method just
+// returns math.MaxInt
 func (m *LinearBlockMetadata) FreeRegionsCount() int {
 	// This function is used for defragmentation, which is disabled for this algorithm
 	return math.MaxInt
 }
 
+// VisitAllRegions will call the provided callback once for each allocation and free region in
+// the block.  Depending on implementation, this can be extremely slow and should generally not
+// be done except for diagnostic purposes.
 func (m *LinearBlockMetadata) VisitAllRegions(handleBlock func(handle BlockAllocationHandle, offset int, size int, userData any, free bool) error) error {
 	size := m.Size()
 	firstVector := *m.accessSuballocationsFirst()
@@ -352,6 +396,8 @@ func (m *LinearBlockMetadata) VisitAllRegions(handleBlock func(handle BlockAlloc
 	return nil
 }
 
+// AddDetailedStatistics sums this block's allocation statistics into the statistics currently present
+// in the provided memutils.DetailedStatistics object.
 func (m *LinearBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStatistics) {
 	stats.Statistics.BlockCount++
 	stats.Statistics.BlockBytes += m.Size()
@@ -368,6 +414,8 @@ func (m *LinearBlockMetadata) AddDetailedStatistics(stats *memutils.DetailedStat
 		})
 }
 
+// AddStatistics sums this block's allocation statistics into the statistics currently present in the
+// provided memutils.Statistics object.
 func (m *LinearBlockMetadata) AddStatistics(stats *memutils.Statistics) {
 
 	size := m.Size()
@@ -385,6 +433,7 @@ func (m *LinearBlockMetadata) AddStatistics(stats *memutils.Statistics) {
 		})
 }
 
+// BlockJsonData populates a json object with information about this block
 func (m *LinearBlockMetadata) BlockJsonData(json jwriter.ObjectState) {
 	// first pass
 	size := m.Size()
@@ -406,6 +455,22 @@ func (m *LinearBlockMetadata) BlockJsonData(json jwriter.ObjectState) {
 	m.WriteBlockJson(json, unusedBytes, allocCount, unusedRangeCount)
 }
 
+// CreateAllocationRequest retrieves an AllocationRequest object indicating where and how the implementation
+// would prefer to allocate the requested memory. That object can be passed to Alloc to commit the
+// allocation.
+//
+// allocSize - the size in bytes of the requested allocation
+// allocAlignment - the minimum alignment of the requested allocation. The implementation may increase
+// the alignment above this value, but may not reduce it below this value
+// upperAddress - This parameter indicates that the allocation should
+// be made in the second buffer if true.
+// allocType - Memory-system-dependent allocation type value. The consumer may care about this.
+// Implementations usually have a consumer-provided "granularity handler" which may care about this.
+// strategy - Whether to prioritize memory usage, memory offset, or allocation speed when choosing
+// a place for the requested allocation.
+// maxOffset - This parameter should usually be math.MaxInt. The requested allocation must fail
+// if the allocation cannot be placed at an offset before the provided maxOffset. This is primarily
+// used by memutils.defrag to make relocating an allocation within a block more performant.
 func (m *LinearBlockMetadata) CreateAllocationRequest(
 	allocSize int, allocAlignment uint,
 	upperAddress bool,
@@ -433,6 +498,19 @@ func (m *LinearBlockMetadata) CreateAllocationRequest(
 	return success, allocRequest, nil
 }
 
+// CheckCorruption accepts a pointer to the underlying memory that this block manages. It will return
+// nil if anti-corruption memory markers are present for every suballocation in the block. This method
+// is fairly expensive and so should only be run as part of some sort of diagnostic regime.
+//
+// Bear in mind that anti-corruption memory markers are only written when memutils is built with
+// the build flag `debug_mem_utils`. This method will not return an error when that flag is not present,
+// but it is expensive regardless of build flags and so should only be run when mem_utils.DebugMargin
+// is not 0.
+//
+// Additionally, it is the responsibility of consumers to write the debug markers themselves after
+// allocation, by calling memutils.WriteMagicValue with the same pointer sent to CheckCorruption.
+// If the consumer has failed to write the anti-corruption markers, then this method will return an
+// error.
 func (m *LinearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) error {
 	firstVector := *m.accessSuballocationsFirst()
 
@@ -454,9 +532,13 @@ func (m *LinearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) error {
 	return nil
 }
 
+// Alloc commits an AllocationRequest object, creating the suballocation within the block based
+// on the data described in the AllocationRequest. The implementation must return an error if the
+// allocation is no longer valid- i.e. the requested free region no longer exists, is not free,
+// offset has changed, is no longer large enough to support the request, etc.
 func (m *LinearBlockMetadata) Alloc(req AllocationRequest, allocType uint32, userData any) error {
 	offset := int(req.BlockAllocationHandle) - 1
-	newSuballoc := Suballocation{
+	newSuballoc := suballocation{
 		Offset:   offset,
 		Size:     req.Size,
 		UserData: userData,
@@ -526,6 +608,10 @@ func (m *LinearBlockMetadata) Alloc(req AllocationRequest, allocType uint32, use
 	return nil
 }
 
+// Free frees a suballocation within the block, causing it to become a free region once again.
+//
+// The implementation must return an error if the provided handle does not map to a live allocation
+// within this block.
 func (m *LinearBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 	firstVectorPtr := m.accessSuballocationsFirst()
 	firstVector := *firstVectorPtr
@@ -605,6 +691,11 @@ func (m *LinearBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 	return errors.New("allocation to free not found in this allocator")
 }
 
+// AllocationUserData accepts a BlockAllocationHandle that maps to a live allocation within the block
+// and returns the userdata value provided by the consumer for that allocation.
+//
+// The implementation must return an error if the provided handle does not map to a live allocation
+// within this block.
 func (m *LinearBlockMetadata) AllocationUserData(allocHandle BlockAllocationHandle) (any, error) {
 	suballoc, err := m.findSuballocation(int(allocHandle) - 1)
 	if err != nil {
@@ -613,14 +704,17 @@ func (m *LinearBlockMetadata) AllocationUserData(allocHandle BlockAllocationHand
 	return suballoc.UserData, nil
 }
 
+// AllocationListBegin will return an error because LinearBlockMetadata does not allow random access to allocations
 func (m *LinearBlockMetadata) AllocationListBegin() (BlockAllocationHandle, error) {
 	return 0, errors.New("this allocator does not support random access")
 }
 
+// FindNextAllocation will return an error because LinearBlockMetadata does not allow random access to allocations
 func (m *LinearBlockMetadata) FindNextAllocation(allocHandle BlockAllocationHandle) (BlockAllocationHandle, error) {
 	return 0, errors.New("this allocator does not support random access")
 }
 
+// Clear instantly frees all allocations and and resets the state of the metadata
 func (m *LinearBlockMetadata) Clear() {
 	m.sumFreeSize = m.size
 	m.suballocations0 = m.suballocations0[:0]
@@ -631,6 +725,11 @@ func (m *LinearBlockMetadata) Clear() {
 	m.secondNullItemsCount = 0
 }
 
+// SetAllocationUserData accepts a BlockAllocationHandle that maps to a live allocation within the
+// block and a userData value. The allocation's userData is changed to the provided userData.
+//
+// The implementation must return an error if the provided handle does not map to a live allocation
+// within this block.
 func (m *LinearBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationHandle, userData any) error {
 	suballoc, err := m.findSuballocation(int(allocHandle) - 1)
 	if err != nil {
@@ -640,7 +739,7 @@ func (m *LinearBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationH
 	return nil
 }
 
-func (m *LinearBlockMetadata) findSuballocation(offset int) (*Suballocation, error) {
+func (m *LinearBlockMetadata) findSuballocation(offset int) (*suballocation, error) {
 
 	// Check first vector
 	firstVector := *m.accessSuballocationsFirst()
@@ -751,7 +850,7 @@ func (m *LinearBlockMetadata) cleanupAfterFree() {
 
 	// First vector became empty
 	if len(firstVector)-m.firstNullItemsBeginCount == 0 {
-		*firstVectorPtr = []Suballocation{}
+		*firstVectorPtr = []suballocation{}
 		m.firstNullItemsBeginCount = 0
 
 		if len(secondVector) > 0 && m.secondVectorMode == SecondVectorModeRingBuffer {
@@ -937,6 +1036,20 @@ func (m *LinearBlockMetadata) populateAllocationRequestLower(
 	return false
 }
 
+// MayHaveFreeBlock should return a heuristic indicating whether the block could possibly support a new
+// allocation of the provided type and size. allocType is a value that has meaning within the memory
+// system consuming BlockMetadata. The implementation may or may not care, and could potentially pass
+// the value back to some callback or interface provided by the consumer. The size parameter is the size
+// in bytes of the hypothetical allocation.
+//
+// This method is used by memutils.defrag to very rapidly determine whether it can ignore blocks when
+// trying to reposition allocations. As a result, the most important requirement for the implementation
+// is that this method be fast and not produce false negatives. False positives are ok, but ideal defrag performance
+// requires that this method balance runtime with the likelihood of false positives.
+//
+// It is completely acceptable for consumers to use this method for the same purpose as memutils.defrag
+// (determine whether a block can be ignored while attempting to rapidly make allocations of a particular
+// size).
 func (m *LinearBlockMetadata) MayHaveFreeBlock(allocType uint32, size int) bool {
 	return size <= m.sumFreeSize
 }
@@ -1046,7 +1159,7 @@ func (m *LinearBlockMetadata) populateAllocationRequestUpper(
 	return true, nil
 }
 
-func (m *LinearBlockMetadata) accessSuballocationsFirst() *[]Suballocation {
+func (m *LinearBlockMetadata) accessSuballocationsFirst() *[]suballocation {
 	if m.firstVectorIndex != 0 {
 		return &m.suballocations1
 	}
@@ -1054,7 +1167,7 @@ func (m *LinearBlockMetadata) accessSuballocationsFirst() *[]Suballocation {
 	return &m.suballocations0
 }
 
-func (m *LinearBlockMetadata) accessSuballocationsSecond() *[]Suballocation {
+func (m *LinearBlockMetadata) accessSuballocationsSecond() *[]suballocation {
 	if m.firstVectorIndex != 0 {
 		return &m.suballocations0
 	}
