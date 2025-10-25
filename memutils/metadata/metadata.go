@@ -8,6 +8,8 @@ import (
 	"github.com/vkngwrapper/core/v2/driver"
 )
 
+//go:generate mockgen -source metadata.go -destination ./mocks/metadata.go
+
 // BlockMetadata represents a single large allocation of memory within some system. It manages
 // suballocations within the block, allowing allocations to be requested and freed, as well as
 // enumerated and queried.

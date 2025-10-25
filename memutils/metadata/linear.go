@@ -50,8 +50,8 @@ type LinearBlockMetadata struct {
 	BlockMetadataBase
 
 	sumFreeSize      int
-	suballocations0  []suballocation
-	suballocations1  []suballocation
+	suballocations0  []Suballocation
+	suballocations1  []Suballocation
 	firstVectorIndex int
 	secondVectorMode secondVectorMode
 
@@ -71,8 +71,8 @@ func NewLinearBlockMetadata(bufferImageGranularity int, granularityHandler Granu
 	return &LinearBlockMetadata{
 		BlockMetadataBase: NewBlockMetadata(bufferImageGranularity, granularityHandler),
 		secondVectorMode:  SecondVectorModeEmpty,
-		suballocations0:   []suballocation{},
-		suballocations1:   []suballocation{},
+		suballocations0:   []Suballocation{},
+		suballocations1:   []Suballocation{},
 	}
 }
 
@@ -538,7 +538,7 @@ func (m *LinearBlockMetadata) CheckCorruption(blockData unsafe.Pointer) error {
 // offset has changed, is no longer large enough to support the request, etc.
 func (m *LinearBlockMetadata) Alloc(req AllocationRequest, allocType uint32, userData any) error {
 	offset := int(req.BlockAllocationHandle) - 1
-	newSuballoc := suballocation{
+	newSuballoc := Suballocation{
 		Offset:   offset,
 		Size:     req.Size,
 		UserData: userData,
@@ -739,7 +739,7 @@ func (m *LinearBlockMetadata) SetAllocationUserData(allocHandle BlockAllocationH
 	return nil
 }
 
-func (m *LinearBlockMetadata) findSuballocation(offset int) (*suballocation, error) {
+func (m *LinearBlockMetadata) findSuballocation(offset int) (*Suballocation, error) {
 
 	// Check first vector
 	firstVector := *m.accessSuballocationsFirst()
@@ -850,7 +850,7 @@ func (m *LinearBlockMetadata) cleanupAfterFree() {
 
 	// First vector became empty
 	if len(firstVector)-m.firstNullItemsBeginCount == 0 {
-		*firstVectorPtr = []suballocation{}
+		*firstVectorPtr = []Suballocation{}
 		m.firstNullItemsBeginCount = 0
 
 		if len(secondVector) > 0 && m.secondVectorMode == SecondVectorModeRingBuffer {
@@ -1159,7 +1159,7 @@ func (m *LinearBlockMetadata) populateAllocationRequestUpper(
 	return true, nil
 }
 
-func (m *LinearBlockMetadata) accessSuballocationsFirst() *[]suballocation {
+func (m *LinearBlockMetadata) accessSuballocationsFirst() *[]Suballocation {
 	if m.firstVectorIndex != 0 {
 		return &m.suballocations1
 	}
@@ -1167,7 +1167,7 @@ func (m *LinearBlockMetadata) accessSuballocationsFirst() *[]suballocation {
 	return &m.suballocations0
 }
 
-func (m *LinearBlockMetadata) accessSuballocationsSecond() *[]suballocation {
+func (m *LinearBlockMetadata) accessSuballocationsSecond() *[]Suballocation {
 	if m.firstVectorIndex != 0 {
 		return &m.suballocations0
 	}

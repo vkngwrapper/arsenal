@@ -1,6 +1,6 @@
 module github.com/vkngwrapper/arsenal/memutils
 
-go 1.20
+go 1.23.0
 
 require (
 	github.com/dolthub/swiss v0.1.0
@@ -15,4 +15,5 @@ require (
 	github.com/dolthub/maphash v0.0.0-20221220182448-74e1e1ea1577 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
+	go.uber.org/mock v0.6.0 // indirect
 )

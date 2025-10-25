@@ -38,7 +38,7 @@ type AllocationRequest struct {
 	// Size the total size of the allocation, maybe larger than what was originally requested
 	Size int
 	// Item is a Suballocation object indicating basic information about the allocation
-	Item suballocation
+	Item Suballocation
 	// Type identifies the sort of allocation this request represents (and can be used
 	// to identify the BlockMetadata implementation used to generate this request).
 	Type AllocationRequestType

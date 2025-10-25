@@ -1,6 +1,12 @@
 package vam
 
 import (
+	"log"
+	"os"
+	"runtime"
+	"testing"
+	"unsafe"
+
 	"github.com/stretchr/testify/require"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
@@ -11,11 +17,6 @@ import (
 	"github.com/vkngwrapper/extensions/v2/khr_portability_enumeration"
 	"github.com/vkngwrapper/extensions/v2/khr_portability_subset"
 	"golang.org/x/exp/slog"
-	"log"
-	"os"
-	"runtime"
-	"testing"
-	"unsafe"
 )
 
 func logDebug(msgType ext_debug_utils.DebugUtilsMessageTypeFlags, severity ext_debug_utils.DebugUtilsMessageSeverityFlags, data *ext_debug_utils.DebugUtilsMessengerCallbackData) bool {
@@ -453,7 +454,8 @@ func BenchmarkAllocDefragFast(b *testing.B) {
 		var defragContext DefragmentationContext
 		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
 			Flags:                 DefragmentationFlagAlgorithmFast,
-			MaxAllocationsPerPass: 100,
+			MaxAllocationsPerPass: 50,
+			MaxBytesPerPass:       100000000,
 		}, &defragContext)
 		require.NoError(b, err)
 
@@ -517,7 +519,8 @@ func BenchmarkAllocDefragFull(b *testing.B) {
 		var defragContext DefragmentationContext
 		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
 			Flags:                 DefragmentationFlagAlgorithmFull,
-			MaxAllocationsPerPass: 20,
+			MaxAllocationsPerPass: 50,
+			MaxBytesPerPass:       100000000,
 		}, &defragContext)
 		require.NoError(b, err)
 
@@ -578,7 +581,8 @@ func BenchmarkAllocDefragBig(b *testing.B) {
 		var defragContext DefragmentationContext
 		_, err = allocator.BeginDefragmentation(DefragmentationInfo{
 			Flags:                 DefragmentationFlagAlgorithmFull,
-			MaxAllocationsPerPass: 20,
+			MaxAllocationsPerPass: 50,
+			MaxBytesPerPass:       100000000,
 		}, &defragContext)
 		require.NoError(b, err)
 

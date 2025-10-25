@@ -3,11 +3,12 @@ package defrag
 import (
 	"errors"
 	"fmt"
+	"math"
+
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"math"
 )
 
 // Algorithm identifies which defragmentation algorithm will be used for defrag passes
@@ -67,8 +68,7 @@ type MetadataDefragContext[T any] struct {
 	// BlockList is the memory object this context exists to defragment
 	BlockList BlockList[T]
 
-	moves         []DefragmentationMove[T]
-	ignoredAllocs int
+	moves []DefragmentationMove[T]
 
 	immovableBlockCount int
 
@@ -120,8 +120,8 @@ func (c *MetadataDefragContext[T]) BlockListCompletePass(pass *PassContext) erro
 
 		c.scratchStats = memutils.Statistics{}
 		c.BlockList.AddStatistics(&c.scratchStats)
-		prevCount := c.scratchStats.BlockCount
-		prevBytes := c.scratchStats.BlockBytes
+		prevCount := c.scratchStats.AllocationCount
+		prevBytes := c.scratchStats.AllocationBytes
 
 		err := c.Handler(move)
 		if err != nil {
@@ -131,8 +131,8 @@ func (c *MetadataDefragContext[T]) BlockListCompletePass(pass *PassContext) erro
 
 		c.scratchStats = memutils.Statistics{}
 		c.BlockList.AddStatistics(&c.scratchStats)
-		pass.Stats.DeviceMemoryBlocksFreed += prevCount - c.scratchStats.BlockCount
-		pass.Stats.BytesFreed += prevBytes - c.scratchStats.BlockBytes
+		pass.Stats.DeviceMemoryBlocksFreed += prevCount - c.scratchStats.AllocationCount
+		pass.Stats.BytesFreed += prevBytes - c.scratchStats.AllocationBytes
 
 		switch move.MoveOperation {
 		case DefragmentationMoveIgnore:
@@ -175,6 +175,7 @@ func (c *MetadataDefragContext[T]) swapImmovableBlocks(mtdata metadata.BlockMeta
 		if c.BlockList.MetadataForBlock(i) == mtdata {
 			c.BlockList.SwapBlocks(i, c.immovableBlockCount)
 			c.immovableBlockCount++
+			break
 		}
 	}
 }
@@ -185,24 +186,22 @@ func (c *MetadataDefragContext[T]) swapImmovableBlocks(mtdata metadata.BlockMeta
 // stateIndex - the index of blockList within the larger set of BlockList objects being defragmented in this run
 //
 // blockList - the memory pool to collect relocation operations for
-func (c *MetadataDefragContext[T]) BlockListCollectMoves(pass *PassContext) bool {
+func (c *MetadataDefragContext[T]) BlockListCollectMoves(pass *PassContext) {
 	c.BlockList.Lock()
 	defer c.BlockList.Unlock()
 
 	if c.BlockList.BlockCount() > 1 {
 		switch c.Algorithm {
 		case AlgorithmFast:
-			return c.walkSuballocations(pass, c.defragFastSuballocHandler)
+			c.walkSuballocations(pass, c.defragFastSuballocHandler)
 		case AlgorithmFull:
-			return c.walkSuballocations(pass, c.defragFullSuballocHandler)
+			c.walkSuballocations(pass, c.defragFullSuballocHandler)
 		default:
 			panic(fmt.Sprintf("attempted to defragment with unknown algorithm: %s", c.Algorithm.String()))
 		}
 	} else if c.BlockList.BlockCount() == 1 && c.Algorithm != AlgorithmFast {
-		return c.walkSuballocations(pass, c.reallocSuballocHandler)
+		c.walkSuballocations(pass, c.reallocSuballocHandler)
 	}
-
-	return false
 }
 
 // Moves returns the list of relocation operations most recently collected with BlockListCollectMoves
@@ -288,9 +287,9 @@ func (c *MetadataDefragContext[T]) allocInOtherBlock(start, end int, data *MoveA
 
 type walkHandler[T any] func(pass *PassContext, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData MoveAllocationData[T]) bool
 
-func (c *MetadataDefragContext[T]) walkSuballocations(pass *PassContext, suballocHandler walkHandler[T]) bool {
+func (c *MetadataDefragContext[T]) walkSuballocations(pass *PassContext, suballocHandler walkHandler[T]) {
 	// Go through allocation in last blocks and try to fit them inside first ones
-	for blockIndex := c.BlockList.BlockCount() - 1; blockIndex > c.immovableBlockCount; blockIndex-- {
+	for blockIndex := c.BlockList.BlockCount() - 1; blockIndex >= c.immovableBlockCount; blockIndex-- {
 		mtdata := c.BlockList.MetadataForBlock(blockIndex)
 
 		for handle := c.mustBeginAllocationList(mtdata); handle != metadata.NoAllocation; handle = c.mustFindNextAllocation(mtdata, handle) {
@@ -304,20 +303,19 @@ func (c *MetadataDefragContext[T]) walkSuballocations(pass *PassContext, suballo
 			case defragCounterIgnore:
 				continue
 			case defragCounterEnd:
-				return true
+				return
 			case defragCounterPass:
+				// If we passed, continue on to the suballocHandler()
 				break
 			default:
 				panic(fmt.Sprintf("unexpected defrag counter status: %s", counter.String()))
 			}
 
 			if suballocHandler(pass, blockIndex, mtdata, handle, moveData) {
-				return true
+				return
 			}
 		}
 	}
-
-	return false
 }
 
 func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockIndex int, mtdata metadata.BlockMetadata, handle metadata.BlockAllocationHandle, moveData *MoveAllocationData[T]) bool {

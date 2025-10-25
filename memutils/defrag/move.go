@@ -32,34 +32,6 @@ type DefragmentationMove[T any] struct {
 	DstTmpAllocation *T
 }
 
-type defragmentOperation uint32
-
-const (
-	defragmentOperationFindFreeBlockTexture defragmentOperation = iota
-	defragmentOperationFindFreeBlockBuffer
-	defragmentOperationFindFreeBlockAll
-	defragmentOperationMoveBuffers
-	defragmentOperationMoveTextures
-	defragmentOperationMoveAll
-	defragmentOperationCleanup
-	defragmentOperationDone
-)
-
-var defragOperationMapping = map[defragmentOperation]string{
-	defragmentOperationFindFreeBlockTexture: "defragmentOperationFindFreeBlockTexture",
-	defragmentOperationFindFreeBlockBuffer:  "defragmentOperationFindFreeBlockBuffer",
-	defragmentOperationFindFreeBlockAll:     "defragmentOperationFindFreeBlockAll",
-	defragmentOperationMoveBuffers:          "defragmentOperationMoveBuffers",
-	defragmentOperationMoveTextures:         "defragmentOperationMoveTextures",
-	defragmentOperationMoveAll:              "defragmentOperationMoveAll",
-	defragmentOperationCleanup:              "defragmentOperationCleanup",
-	defragmentOperationDone:                 "defragmentOperationDone",
-}
-
-func (m defragmentOperation) String() string {
-	return defragOperationMapping[m]
-}
-
 // MoveAllocationData represents a single allocation that needs to be relocated. It contains
 // useful information about the moving allocation, as well as a DefragmentationMove object
 // that is generally populated with source allocation information, but not destination allocation

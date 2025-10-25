@@ -2,12 +2,13 @@ package vam
 
 import (
 	"fmt"
-	"github.com/vkngwrapper/arsenal/memutils/defrag"
-	"github.com/vkngwrapper/core/v2/common"
-	"golang.org/x/exp/slog"
 	"math"
 	"sync"
 	"unsafe"
+
+	"github.com/vkngwrapper/arsenal/memutils/defrag"
+	"github.com/vkngwrapper/core/v2/common"
+	"golang.org/x/exp/slog"
 )
 
 // DefragmentationFlags is a set of bitflags that specify behavior for the DefragmentationContext
@@ -186,10 +187,7 @@ func (c *DefragmentationContext) BeginDefragPass() []defrag.DefragmentationMove[
 			continue
 		}
 
-		if c.context[c.blockListProgress].BlockListCollectMoves(&c.pass) {
-			break
-		}
-
+		c.context[c.blockListProgress].BlockListCollectMoves(&c.pass)
 		moves = c.context[c.blockListProgress].Moves()
 
 		if len(moves) > 0 {

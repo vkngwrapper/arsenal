@@ -12,7 +12,7 @@ const (
 	NoAllocation BlockAllocationHandle = math.MaxUint64
 )
 
-type suballocation struct {
+type Suballocation struct {
 	Offset   int
 	Size     int
 	UserData any
