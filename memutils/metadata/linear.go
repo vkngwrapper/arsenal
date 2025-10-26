@@ -212,7 +212,7 @@ func (m *LinearBlockMetadata) Validate() error {
 				nullItemSecondCount++
 			}
 
-			offset = suballoc.Offset + suballoc.Size + debugMargin
+			offset = suballoc.Offset - suballoc.Size - debugMargin
 		}
 
 		if nullItemSecondCount != m.secondNullItemsCount {
@@ -674,8 +674,8 @@ func (m *LinearBlockMetadata) Free(allocHandle BlockAllocationHandle) error {
 	if m.secondVectorMode != SecondVectorModeEmpty {
 		// Item from the middle of second vector
 		out, found := sort.Find(len(secondVector), func(index int) int {
-			foundOffset := firstVector[index].Offset
-			return offset - foundOffset
+			foundOffset := secondVector[index].Offset
+			return foundOffset - offset
 		})
 		if found {
 			suballoc := &(secondVector[out])
@@ -765,7 +765,7 @@ func (m *LinearBlockMetadata) findSuballocation(offset int) (*Suballocation, err
 }
 
 func (m *LinearBlockMetadata) shouldCompactFirstVector() bool {
-	nullItemCount := m.firstNullItemsMiddleCount + m.firstNullItemsMiddleCount
+	nullItemCount := m.firstNullItemsBeginCount + m.firstNullItemsMiddleCount
 	firstVector := *m.accessSuballocationsFirst()
 
 	return len(firstVector) > 32 && nullItemCount*2 >= (len(firstVector)-nullItemCount)*3
@@ -1118,7 +1118,11 @@ func (m *LinearBlockMetadata) populateAllocationRequestUpper(
 		}
 
 		if bufferImageGranularityConflict {
-			resultOffset = memutils.AlignDown(resultOffset, uint(m.allocationGranularity))
+			// We can't just align down the offset, we have to align down the last byte in the allocation
+			endOffset := resultOffset + allocSize - 1
+			alignedEndOffset := memutils.AlignDown(endOffset, uint(m.allocationGranularity))
+			alignedDiff := endOffset - alignedEndOffset
+			resultOffset = memutils.AlignDown(resultOffset-alignedDiff, uint(m.allocationGranularity))
 		}
 	}
 
