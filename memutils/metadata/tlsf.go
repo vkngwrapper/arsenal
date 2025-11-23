@@ -434,6 +434,10 @@ func (m *TLSFBlockMetadata) CreateAllocationRequest(
 
 	// Any free blocks in the pool?
 	if m.blocksFreeCount == 0 {
+		if strategy&AllocationStrategyMinOffset != 0 && m.nullBlock.offset > maxOffset {
+			return false, allocRequest, nil
+		}
+
 		success := m.checkBlock(m.nullBlock, len(m.freeList), allocSize, allocAlignment, allocType, &allocRequest)
 		return success, allocRequest, nil
 	}
@@ -533,9 +537,6 @@ func (m *TLSFBlockMetadata) CreateAllocationRequest(
 		if foundBlock {
 			return foundBlock, allocRequest, nil
 		}
-
-		// Whole range searched, no more memory
-		return false, allocRequest, nil
 	} else {
 		// Check larger bucket
 		nextListBlock, nextListIndex = m.findFreeBlock(sizeForNextList)
