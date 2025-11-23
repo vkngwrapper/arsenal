@@ -5,7 +5,6 @@ import (
 
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/vkngwrapper/arsenal/memutils"
-	"github.com/vkngwrapper/core/v2/driver"
 )
 
 //go:generate mockgen -source metadata.go -destination ./mocks/metadata.go
@@ -166,7 +165,6 @@ type BlockMetadata interface {
 // implementations in the memutils module.
 type BlockMetadataBase struct {
 	size                  int
-	allocationCallbacks   *driver.AllocationCallbacks
 	allocationGranularity int
 	granularityHandler    GranularityCheck
 }

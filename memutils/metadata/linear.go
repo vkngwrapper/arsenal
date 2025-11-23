@@ -553,7 +553,6 @@ func (m *LinearBlockMetadata) Alloc(req AllocationRequest, allocType uint32, use
 		secondVector := m.accessSuballocationsSecond()
 		*secondVector = append(*secondVector, newSuballoc)
 		m.secondVectorMode = SecondVectorModeDoubleStack
-		break
 	case AllocationRequestEndOf1st:
 		firstVector := m.accessSuballocationsFirst()
 
@@ -569,7 +568,6 @@ func (m *LinearBlockMetadata) Alloc(req AllocationRequest, allocType uint32, use
 		}
 
 		*firstVector = append(*firstVector, newSuballoc)
-		break
 	case AllocationRequestEndOf2nd:
 		firstVector := *m.accessSuballocationsFirst()
 		// New allocation at the end of 2-part ring buffer, so place it before the first allocation
@@ -588,18 +586,15 @@ func (m *LinearBlockMetadata) Alloc(req AllocationRequest, allocType uint32, use
 			}
 
 			m.secondVectorMode = SecondVectorModeRingBuffer
-			break
 		case SecondVectorModeRingBuffer:
 			if len(*secondVector) == 0 {
 				return errors.New("the second vector was marked as a ring buffer, but was empty")
 			}
-			break
 		case SecondVectorModeDoubleStack:
 			return errors.New("attempted to allocate as a ring buffer when the vector was marked as a stack")
 		}
 
 		*secondVector = append(*secondVector, newSuballoc)
-		break
 	default:
 		return errors.Errorf("attempted to allocate a request of type %s, but that type isn't supported by the Linear metadata", req.Type)
 	}
