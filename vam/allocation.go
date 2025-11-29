@@ -84,7 +84,7 @@ type Allocation struct {
 	memoryTypeIndex   int
 	allocationType    allocationType
 	suballocationType suballocationType
-	memory            *vulkan.SynchronizedMemory
+	memory            vulkan.SynchronizedMemory
 
 	parentAllocator *Allocator
 
@@ -150,7 +150,7 @@ func (a *Allocation) initBlockAllocation(
 func (a *Allocation) initDedicatedAllocation(
 	parentPool *Pool,
 	memoryTypeIndex int,
-	memory *vulkan.SynchronizedMemory,
+	memory vulkan.SynchronizedMemory,
 	suballocationType suballocationType,
 	size int,
 ) {

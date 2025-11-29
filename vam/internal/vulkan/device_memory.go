@@ -2,6 +2,8 @@ package vulkan
 
 import (
 	"fmt"
+	"sync/atomic"
+
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
@@ -13,7 +15,6 @@ import (
 	"github.com/vkngwrapper/extensions/v2/amd_device_coherent_memory"
 	"github.com/vkngwrapper/extensions/v2/ext_memory_budget"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory_capabilities"
-	"sync/atomic"
 )
 
 type Budget struct {
@@ -217,7 +218,7 @@ func (m *DeviceMemoryProperties) removeBlockAllocation(heapIndex, allocationSize
 
 func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	allocateInfo core1_0.MemoryAllocateInfo,
-) (mem *SynchronizedMemory, res common.VkResult, err error) {
+) (mem *VulkanSynchronizedMemory, res common.VkResult, err error) {
 	newDeviceCount := m.memoryCount.Add(1)
 	defer func() {
 		// If we failed out, roll back the device increment
@@ -257,6 +258,7 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 		m.device,
 		m.useMutex,
 		m.allocationCallbacks,
+		m.extensions,
 		allocateInfo,
 	)
 	if err != nil {
@@ -276,7 +278,7 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	return mem, res, nil
 }
 
-func (m *DeviceMemoryProperties) FreeVulkanMemory(memoryType int, size int, memory *SynchronizedMemory) {
+func (m *DeviceMemoryProperties) FreeVulkanMemory(memoryType int, size int, memory SynchronizedMemory) {
 	if m.memoryCallbacks != nil {
 		m.memoryCallbacks.Free(
 			memoryType,

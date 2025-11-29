@@ -1,6 +1,7 @@
 package vam
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/bits"
@@ -121,7 +122,6 @@ func (a *Allocator) findMemoryPreferences(
 	switch o.Usage {
 	case MemoryUsageGPULazilyAllocated:
 		requiredFlags |= core1_0.MemoryPropertyLazilyAllocated
-		break
 	case MemoryUsageAuto, MemoryUsageAutoPreferDevice, MemoryUsageAutoPreferHost:
 		{
 			transferUsages := uint32(core1_0.BufferUsageTransferDst) | uint32(core1_0.BufferUsageTransferSrc) |
@@ -549,7 +549,7 @@ func (a *Allocator) allocateDedicatedMemory(
 			dedicatedAllocations.Register(&allocations[registerIndex])
 		}
 
-		a.logger.LogAttrs(nil, slog.LevelDebug, "    Allocated DedicatedMemory", slog.Int("Count", len(allocations)), slog.Int("MemoryTypeIndex", memoryTypeIndex))
+		a.logger.LogAttrs(context.Background(), slog.LevelDebug, "    Allocated DedicatedMemory", slog.Int("Count", len(allocations)), slog.Int("MemoryTypeIndex", memoryTypeIndex))
 
 		return core1_0.VKSuccess, nil
 	}
@@ -558,9 +558,8 @@ func (a *Allocator) allocateDedicatedMemory(
 	for allocIndex > 0 {
 		allocIndex--
 
-		currentAlloc := allocations[allocIndex]
-		a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, currentAlloc.Size(), currentAlloc.memory)
-		a.deviceMemory.RemoveAllocation(a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex), currentAlloc.Size())
+		a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, allocations[allocIndex].Size(), allocations[allocIndex].memory)
+		a.deviceMemory.RemoveAllocation(a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex), allocations[allocIndex].Size())
 	}
 
 	return res, err
@@ -588,7 +587,7 @@ func (a *Allocator) allocateMemoryOfType(
 		panic("allocateMemoryOfType called with a nil createInfo")
 	}
 
-	a.logger.LogAttrs(nil, slog.LevelDebug, "Allocator::allocateMemoryOfType", slog.Int("MemoryTypeIndex", memoryTypeIndex), slog.Int("AllocationCount", len(allocations)), slog.Int("Size", size))
+	a.logger.LogAttrs(context.Background(), slog.LevelDebug, "Allocator::allocateMemoryOfType", slog.Int("MemoryTypeIndex", memoryTypeIndex), slog.Int("AllocationCount", len(allocations)), slog.Int("Size", size))
 
 	finalCreateInfo := *createInfo
 
@@ -778,7 +777,7 @@ func (a *Allocator) multiAllocateMemory(
 		// Remove memory type index from possibilities
 		memoryBits &= ^(1 << memoryTypeIndex)
 		// Find a new memorytypeindex
-		memoryTypeIndex, res, err = a.findMemoryTypeIndex(memoryBits, options, dedicatedBufferOrImageUsage)
+		memoryTypeIndex, _, err = a.findMemoryTypeIndex(memoryBits, options, dedicatedBufferOrImageUsage)
 	}
 
 	return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
@@ -856,8 +855,8 @@ func (a *Allocator) AllocateMemorySlice(memoryRequirements *core1_0.MemoryRequir
 		return core1_0.VKSuccess, nil
 	}
 
-	for allocIndex, alloc := range allocations {
-		if alloc.memory != nil {
+	for allocIndex := range allocations {
+		if allocations[allocIndex].memory != nil {
 			return core1_0.VKErrorUnknown, errors.Errorf("attempted to overwrite an unfreed allocation at index %d", allocIndex)
 		}
 	}
@@ -1084,7 +1083,7 @@ func (a *Allocator) freeDedicatedMemory(alloc *Allocation) {
 	heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex)
 	a.deviceMemory.RemoveAllocation(heapIndex, alloc.Size())
 
-	a.logger.LogAttrs(nil, slog.LevelDebug, "    Freed DedicatedMemory", slog.Int("MemoryTypeIndex", memoryTypeIndex))
+	a.logger.LogAttrs(context.Background(), slog.LevelDebug, "    Freed DedicatedMemory", slog.Int("MemoryTypeIndex", memoryTypeIndex))
 }
 
 // FlushAllocationSlice is a convenience method that is roughly equivalent to, but may be slightly more
@@ -1179,7 +1178,6 @@ func (a *Allocator) CheckCorruption(memoryTypeBits uint32) (common.VkResult, err
 				break
 			case core1_0.VKSuccess:
 				res = core1_0.VKSuccess
-				break
 			default:
 				if err != nil {
 					return res, err
@@ -1214,7 +1212,6 @@ func (a *Allocator) checkCustomPools(memoryTypeBits uint32) (common.VkResult, er
 			break
 		case core1_0.VKSuccess:
 			res = core1_0.VKSuccess
-			break
 		default:
 			if err != nil {
 				return res, err
@@ -1232,7 +1229,7 @@ func (a *Allocator) checkCustomPools(memoryTypeBits uint32) (common.VkResult, er
 // this Allocator. Other errors are for other obvious forms of parameter validation.
 func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResult, error) {
 
-	a.logger.LogAttrs(nil, slog.LevelDebug, "Allocator::CreatePool",
+	a.logger.LogAttrs(context.Background(), slog.LevelDebug, "Allocator::CreatePool",
 		slog.Int("MemoryTypeIndex", createInfo.MemoryTypeIndex),
 		slog.String("Flags", createInfo.Flags.String()),
 	)
@@ -1299,7 +1296,7 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 	if err != nil {
 		destroyErr := pool.Destroy()
 		if err != nil {
-			a.logger.LogAttrs(nil, slog.LevelError, "error attempting to destroy pool after creation failure", slog.Any("error", destroyErr))
+			a.logger.LogAttrs(context.Background(), slog.LevelError, "error attempting to destroy pool after creation failure", slog.Any("error", destroyErr))
 		}
 		return nil, res, err
 	}
@@ -1311,7 +1308,7 @@ func (a *Allocator) CreatePool(createInfo PoolCreateInfo) (*Pool, common.VkResul
 	if err != nil {
 		destroyErr := pool.destroyAfterLock()
 		if destroyErr != nil {
-			a.logger.LogAttrs(nil, slog.LevelError, "error attempting to destroy pool after failing to set id", slog.Any("error", destroyErr))
+			a.logger.LogAttrs(context.Background(), slog.LevelError, "error attempting to destroy pool after failing to set id", slog.Any("error", destroyErr))
 		}
 
 		return nil, core1_0.VKErrorUnknown, err
@@ -1486,7 +1483,7 @@ func (a *Allocator) createBuffer(bufferInfo *core1_0.BufferCreateInfo, allocatio
 		if err != nil {
 			freeErr := outAlloc.free()
 			if freeErr != nil {
-				a.logger.LogAttrs(nil, slog.LevelError, "failed to free temporary alloc after error", slog.Any("error", freeErr))
+				a.logger.LogAttrs(context.Background(), slog.LevelError, "failed to free temporary alloc after error", slog.Any("error", freeErr))
 			}
 		}
 	}()
@@ -1770,7 +1767,7 @@ func (a *Allocator) CreateImage(imageInfo core1_0.ImageCreateInfo, allocInfo All
 		if err != nil {
 			freeErr := outAlloc.free()
 			if freeErr != nil {
-				a.logger.LogAttrs(nil, slog.LevelError, "failed to free temporary alloc after error", slog.Any("error", freeErr))
+				a.logger.LogAttrs(context.Background(), slog.LevelError, "failed to free temporary alloc after error", slog.Any("error", freeErr))
 			}
 		}
 	}()

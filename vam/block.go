@@ -1,6 +1,7 @@
 package vam
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/pkg/errors"
@@ -14,7 +15,7 @@ import (
 
 type deviceMemoryBlock struct {
 	id              int
-	memory          *vulkan.SynchronizedMemory
+	memory          vulkan.SynchronizedMemory
 	parentPool      *Pool
 	memoryTypeIndex int
 	logger          *slog.Logger
@@ -29,7 +30,7 @@ func (b *deviceMemoryBlock) Init(
 	pool *Pool,
 	deviceMemory *vulkan.DeviceMemoryProperties,
 	newMemoryTypeIndex int,
-	newMemory *vulkan.SynchronizedMemory,
+	newMemory vulkan.SynchronizedMemory,
 	newSize int,
 	id int,
 	algorithm PoolCreateFlags,
@@ -51,10 +52,8 @@ func (b *deviceMemoryBlock) Init(
 	switch algorithm {
 	case 0:
 		b.metadata = metadata.NewTLSFBlockMetadata(bufferImageGranularity, &b.granularityHandler)
-		break
 	case PoolCreateLinearAlgorithm:
 		b.metadata = metadata.NewLinearBlockMetadata(bufferImageGranularity, &b.granularityHandler)
-		break
 	default:
 		panic(fmt.Sprintf("unknown pool algorithm: %s", algorithm.String()))
 	}
@@ -74,7 +73,7 @@ func (b *deviceMemoryBlock) Destroy() error {
 			return nil
 		})
 		if err != nil {
-			b.logger.LogAttrs(nil,
+			b.logger.LogAttrs(context.Background(),
 				slog.LevelError,
 				"[UNRELEASED MEMORY] error while iterating unreleased memory",
 				slog.Any("error", err))
@@ -102,7 +101,7 @@ func (b *deviceMemoryBlock) logUnreleasedMemory(offset, size int, userData any) 
 		name = "empty"
 	}
 
-	b.logger.LogAttrs(nil, slog.LevelError, "[UNRELEASED MEMORY] unfreed allocation",
+	b.logger.LogAttrs(context.Background(), slog.LevelError, "[UNRELEASED MEMORY] unfreed allocation",
 		slog.Int("offset", offset),
 		slog.Int("size", size),
 		slog.Any("userData", userData),

@@ -68,6 +68,7 @@ func createApplication(t require.TestingT, name string) (core1_0.Instance, ext_d
 		MessageType:     ext_debug_utils.TypeGeneral | ext_debug_utils.TypeValidation | ext_debug_utils.TypePerformance,
 		UserCallback:    logDebug,
 	})
+	require.NoError(t, err)
 
 	gpus, _, err := instance.EnumeratePhysicalDevices()
 	require.NoError(t, err)

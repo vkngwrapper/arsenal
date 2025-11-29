@@ -1,6 +1,7 @@
 package vam
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -278,35 +279,6 @@ func (l *memoryBlockList) Allocate(size int, alignment uint, createInfo *Allocat
 	return res, err
 }
 
-func (l *memoryBlockList) allocPages(size int, alignment uint, createInfo *AllocationCreateInfo, suballocType suballocationType, allocs []Allocation) (res common.VkResult, err error) {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
-
-	var allocIndex int
-	defer func() {
-		if err == nil {
-			return
-		}
-		// Clean up failed allocation attempt
-		for allocIndex > 0 {
-			allocIndex--
-			err := l.Free(&allocs[allocIndex])
-			if err != nil {
-				l.logger.LogAttrs(nil, slog.LevelError, "failed to clean up after failed allocation- Free returned an error", slog.Any("error", err))
-			}
-		}
-	}()
-
-	for allocIndex = 0; allocIndex < len(allocs); allocIndex++ {
-		res, err = l.allocPage(size, alignment, createInfo, suballocType, &allocs[allocIndex])
-		if err != nil {
-			return res, err
-		}
-	}
-
-	return core1_0.VKSuccess, nil
-}
-
 func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *AllocationCreateInfo, suballocationType suballocationType, outAlloc *Allocation) (common.VkResult, error) {
 	isUpperAddress := createInfo.Flags&AllocationCreateUpperAddress != 0
 
@@ -353,7 +325,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 			if err != nil {
 				return res, err
 			} else if res == core1_0.VKSuccess {
-				l.logger.LogAttrs(nil, slog.LevelDebug, "    Returned from last block", slog.Int("block.id", currentBlock.id))
+				l.logger.LogAttrs(context.Background(), slog.LevelDebug, "    Returned from last block", slog.Int("block.id", currentBlock.id))
 				l.incrementallySortBlocks()
 				return res, nil
 			}
@@ -385,7 +357,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 						if err != nil {
 							return res, err
 						} else if res == core1_0.VKSuccess {
-							l.logger.LogAttrs(nil, slog.LevelDebug, "    Returned from existing block", slog.Int("block.id", currentBlock.id))
+							l.logger.LogAttrs(context.Background(), slog.LevelDebug, "    Returned from existing block", slog.Int("block.id", currentBlock.id))
 							l.incrementallySortBlocks()
 							return res, nil
 						}
@@ -409,7 +381,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 				if err != nil {
 					return res, err
 				} else if res == core1_0.VKSuccess {
-					l.logger.LogAttrs(nil, slog.LevelDebug, "   Returned from existing block", slog.Int("block.id", currentBlock.id))
+					l.logger.LogAttrs(context.Background(), slog.LevelDebug, "   Returned from existing block", slog.Int("block.id", currentBlock.id))
 					l.incrementallySortBlocks()
 					return res, nil
 				}
@@ -427,7 +399,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 			if err != nil {
 				return res, err
 			} else if res == core1_0.VKSuccess {
-				l.logger.LogAttrs(nil, slog.LevelDebug, "    Returned from existing block", slog.Int("block.id", currentBlock.id))
+				l.logger.LogAttrs(context.Background(), slog.LevelDebug, "    Returned from existing block", slog.Int("block.id", currentBlock.id))
 				l.incrementallySortBlocks()
 				return res, nil
 			}
@@ -501,7 +473,7 @@ func (l *memoryBlockList) Free(alloc *Allocation) error {
 	}
 
 	if blockToDelete != nil {
-		l.logger.LogAttrs(nil, slog.LevelDebug, "    Deleted empty block", slog.Int("block.id", blockToDelete.id))
+		l.logger.LogAttrs(context.Background(), slog.LevelDebug, "    Deleted empty block", slog.Int("block.id", blockToDelete.id))
 		err = blockToDelete.Destroy()
 		if err != nil {
 			panic(fmt.Sprintf("unexpected failure when destroying a memory block in response to freeing an allocation: %+v", err))
@@ -546,7 +518,7 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 	block.memory.RecordSuballocSubfree()
 	memutils.DebugValidate(block)
 
-	l.logger.LogAttrs(nil, slog.LevelDebug, "    Freed from block", slog.Int("MemoryTypeIndex", l.memoryTypeIndex))
+	l.logger.LogAttrs(context.Background(), slog.LevelDebug, "    Freed from block", slog.Int("MemoryTypeIndex", l.memoryTypeIndex))
 
 	canDeleteBlock := len(l.blocks) > l.minBlockCount
 
