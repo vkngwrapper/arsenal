@@ -77,10 +77,18 @@ func (g *blockBufferImageGranularity) AllocationsConflict(
 }
 
 func (g *blockBufferImageGranularity) RoundUpAllocRequest(allocType uint32, allocSize int, allocAlignment uint) (int, uint) {
-	if g.bufferImageGranularity > 1 && g.bufferImageGranularity <= MaxLowBufferImageGranularity {
+	if g.bufferImageGranularity > 1 {
+		// This behavior is slightly different from VMA's- you might think it's a bug.
+		// However, it's actually an optimization.  SuballocationImageUnknown
+		// and SuballocationUnknown can never share with other allocations, so just
+		// aligning up reduces the number of tiny unusable allocations between blocks
+		// and is a pretty substantial performance improvement when enough of these
+		// are floating around
 		suballocType := suballocationType(allocType)
+		imageRoundUp := g.bufferImageGranularity <= MaxLowBufferImageGranularity && suballocType == SuballocationImageOptimal
+		generalRoundUp := suballocType == SuballocationImageUnknown || suballocType == SuballocationUnknown
 
-		if suballocType == SuballocationImageOptimal || suballocType == SuballocationImageUnknown || suballocType == SuballocationUnknown {
+		if imageRoundUp || generalRoundUp {
 			if allocAlignment < g.bufferImageGranularity {
 				allocAlignment = g.bufferImageGranularity
 			}
