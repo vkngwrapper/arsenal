@@ -218,7 +218,7 @@ func (m *DeviceMemoryProperties) removeBlockAllocation(heapIndex, allocationSize
 
 func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	allocateInfo core1_0.MemoryAllocateInfo,
-) (mem *VulkanSynchronizedMemory, res common.VkResult, err error) {
+) (mem *SynchronizedMemory, res common.VkResult, err error) {
 	newDeviceCount := m.memoryCount.Add(1)
 	defer func() {
 		// If we failed out, roll back the device increment
@@ -278,7 +278,7 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	return mem, res, nil
 }
 
-func (m *DeviceMemoryProperties) FreeVulkanMemory(memoryType int, size int, memory SynchronizedMemory) {
+func (m *DeviceMemoryProperties) FreeVulkanMemory(memoryType int, size int, memory *SynchronizedMemory) {
 	if m.memoryCallbacks != nil {
 		m.memoryCallbacks.Free(
 			memoryType,

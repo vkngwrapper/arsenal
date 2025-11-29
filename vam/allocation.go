@@ -84,7 +84,7 @@ type Allocation struct {
 	memoryTypeIndex   int
 	allocationType    allocationType
 	suballocationType suballocationType
-	memory            vulkan.SynchronizedMemory
+	memory            *vulkan.SynchronizedMemory
 
 	parentAllocator *Allocator
 
@@ -150,7 +150,7 @@ func (a *Allocation) initBlockAllocation(
 func (a *Allocation) initDedicatedAllocation(
 	parentPool *Pool,
 	memoryTypeIndex int,
-	memory vulkan.SynchronizedMemory,
+	memory *vulkan.SynchronizedMemory,
 	suballocationType suballocationType,
 	size int,
 ) {
@@ -321,7 +321,7 @@ func (a *Allocation) Flush(offset, size int) (common.VkResult, error) {
 	return a.flushOrInvalidate(offset, size, vulkan.CacheOperationFlush)
 }
 
-// Invalidate will invalidate the meory cache for a specified region of memory within this Allocation
+// Invalidate will invalidate the memory cache for a specified region of memory within this Allocation
 //
 // As a device-memory-accessing method, Invalidate will briefly take out a read lock on this Allocation and may block
 // if defragmentation is in progress or the Allocation is currently being freed. If the Allocation has

@@ -15,7 +15,7 @@ import (
 
 type deviceMemoryBlock struct {
 	id              int
-	memory          vulkan.SynchronizedMemory
+	memory          *vulkan.SynchronizedMemory
 	parentPool      *Pool
 	memoryTypeIndex int
 	logger          *slog.Logger
@@ -30,7 +30,7 @@ func (b *deviceMemoryBlock) Init(
 	pool *Pool,
 	deviceMemory *vulkan.DeviceMemoryProperties,
 	newMemoryTypeIndex int,
-	newMemory vulkan.SynchronizedMemory,
+	newMemory *vulkan.SynchronizedMemory,
 	newSize int,
 	id int,
 	algorithm PoolCreateFlags,
