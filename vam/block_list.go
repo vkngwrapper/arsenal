@@ -9,6 +9,8 @@ import (
 	"sync"
 	"unsafe"
 
+	"log/slog"
+
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
@@ -22,7 +24,6 @@ import (
 	"github.com/vkngwrapper/core/v2/core1_2"
 	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
-	"golang.org/x/exp/slog"
 )
 
 var blockPool = sync.Pool{

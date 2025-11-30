@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 
+	"log/slog"
+
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
-	"golang.org/x/exp/slog"
 )
 
 type deviceMemoryBlock struct {

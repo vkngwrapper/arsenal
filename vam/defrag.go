@@ -6,9 +6,10 @@ import (
 	"sync"
 	"unsafe"
 
+	"log/slog"
+
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
 	"github.com/vkngwrapper/core/v2/common"
-	"golang.org/x/exp/slog"
 )
 
 // DefragmentationFlags is a set of bitflags that specify behavior for the DefragmentationContext

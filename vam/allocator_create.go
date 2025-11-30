@@ -1,6 +1,9 @@
 package vam
 
 import (
+	"log/slog"
+	"math"
+
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
@@ -9,8 +12,6 @@ import (
 	"github.com/vkngwrapper/core/v2/core1_0"
 	"github.com/vkngwrapper/core/v2/driver"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory_capabilities"
-	"golang.org/x/exp/slog"
-	"math"
 )
 
 // CreateFlags indicate specific allocator behaviors to activate or deactivate

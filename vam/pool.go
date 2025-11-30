@@ -1,10 +1,11 @@
 package vam
 
 import (
+	"log/slog"
+
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
-	"golang.org/x/exp/slog"
 )
 
 // PoolCreateInfo is an options structure that is used to specify the behavior for a new

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"unsafe"
 
+	"log/slog"
+
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
@@ -23,7 +25,6 @@ import (
 	"github.com/vkngwrapper/extensions/v2/khr_dedicated_allocation"
 	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
 	"github.com/vkngwrapper/extensions/v2/khr_maintenance4"
-	"golang.org/x/exp/slog"
 )
 
 const (

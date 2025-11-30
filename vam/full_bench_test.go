@@ -7,6 +7,8 @@ import (
 	"testing"
 	"unsafe"
 
+	"log/slog"
+
 	"github.com/stretchr/testify/require"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
@@ -16,7 +18,6 @@ import (
 	"github.com/vkngwrapper/extensions/v2/ext_debug_utils"
 	"github.com/vkngwrapper/extensions/v2/khr_portability_enumeration"
 	"github.com/vkngwrapper/extensions/v2/khr_portability_subset"
-	"golang.org/x/exp/slog"
 )
 
 func logDebug(msgType ext_debug_utils.DebugUtilsMessageTypeFlags, severity ext_debug_utils.DebugUtilsMessageSeverityFlags, data *ext_debug_utils.DebugUtilsMessengerCallbackData) bool {
