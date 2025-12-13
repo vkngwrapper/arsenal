@@ -117,12 +117,16 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 		allocator.preferredLargeHeapBlockSize = options.PreferredLargeHeapBlockSize
 	}
 
+	if len(options.HeapSizeLimits) == 0 {
+		options.HeapSizeLimits = make([]int, len(physicalDevice.MemoryProperties().MemoryHeaps))
+	}
+
 	heapTypeCount := len(options.HeapSizeLimits)
 	externalMemoryTypes := make([]khr_external_memory_capabilities.ExternalMemoryHandleTypeFlags, heapTypeCount)
 	// khr_external_memory present by any means
-	if allocator.extensionData.ExternalMemory {
+	if allocator.extensionData.ExternalMemory && len(options.ExternalMemoryHandleTypes) > 0 {
 		externalMemoryTypes = options.ExternalMemoryHandleTypes
-	} else if heapTypeCount > 0 {
+	} else if len(options.ExternalMemoryHandleTypes) > 0 {
 		return nil, errors.New("memory.CreateOptions.ExternalMemoryHandleTypes was provided, but neither the core 1.1 or the extension khr_external_memory are active")
 	}
 

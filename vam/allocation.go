@@ -690,7 +690,7 @@ func (a *Allocation) DestroyImage(image core1_0.Image) error {
 
 // DestroyBuffer is roughly equivalent to calling buffer.Destroy() followed by Free. The main benefit
 // of this method is that buffer.Destroy() will use the allocation callbacks passed to the Allocator
-// that was used to allocat this memory.
+// that was used to allocate this memory.
 func (a *Allocation) DestroyBuffer(buffer core1_0.Buffer) error {
 	a.parentAllocator.logger.Debug("Allocation::DestroyBuffer")
 

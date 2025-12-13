@@ -120,10 +120,6 @@ func NewDeviceMemoryProperties(
 		return nil, errors.New("memory.CreateOptions.ExternalMemoryHandleTypes was provided, but the length does not equal the number of PhysicalDevice heap types")
 	}
 
-	if heapLimitCount == 0 {
-		heapSizeLimits = make([]int, heapCount)
-	}
-
 	deviceProperties.heapLimits = heapSizeLimits
 	deviceProperties.externalMemoryHandleTypes = externalMemoryHandleTypes
 
@@ -239,7 +235,7 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	} else {
 		maxSize := heapLimit
 		heapSize := m.memoryProperties.MemoryHeaps[heapIndex].Size
-		if heapLimit < heapSize {
+		if heapLimit > heapSize {
 			maxSize = heapSize
 		}
 		res, err = m.addBlockAllocationWithBudget(heapIndex, allocateInfo.AllocationSize, maxSize)

@@ -147,7 +147,8 @@ func (a *Allocator) findMemoryPreferences(
 				preferredFlags |= core1_0.MemoryPropertyDeviceLocal | core1_0.MemoryPropertyHostCached
 			} else if hostAccessRandom {
 				// Other CPU-accessible memory
-				requiredFlags |= core1_0.MemoryPropertyHostVisible | core1_0.MemoryPropertyHostCached
+				requiredFlags |= core1_0.MemoryPropertyHostVisible
+				preferredFlags |= core1_0.MemoryPropertyHostCached
 			} else if hostAccessSequentialWrite {
 				// Uncached write-combined memory
 				notPreferredFlags |= core1_0.MemoryPropertyHostCached
@@ -1398,7 +1399,7 @@ func (a *Allocator) CreateBuffer(bufferInfo core1_0.BufferCreateInfo, allocInfo 
 //
 // allocInfo - Options indicating the sort of allocation being made
 //
-// minAlignment - The allocated memory will use this alignment if it is greater than the alignment
+// minAlignment - The allocated memory will use this alignment if it is larger than the alignment
 // for the buffer's memory requirements
 //
 // outAlloc - A pointer to a valid Allocation that has not yet been allocated to (or has been recently freed). Passing
