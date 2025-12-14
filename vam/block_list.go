@@ -638,7 +638,7 @@ func (l *memoryBlockList) commitAllocationRequest(allocRequest metadata.Allocati
 	heapIndex := l.deviceMemory.MemoryTypeIndexToHeapIndex(l.memoryTypeIndex)
 	l.deviceMemory.AddAllocation(heapIndex, allocRequest.Size)
 
-	if memutils.DebugMargin > 0 {
+	if InitializeAllocs {
 		outAlloc.fillAllocation(createdFillPattern)
 	}
 

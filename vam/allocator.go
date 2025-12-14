@@ -438,7 +438,7 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 	}
 	a.deviceMemory.AddAllocation(a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex), size)
 
-	if memutils.DebugMargin > 0 {
+	if InitializeAllocs {
 		alloc.fillAllocation(createdFillPattern)
 	}
 
@@ -1032,7 +1032,7 @@ func (a *Allocator) FreeAllocationSlice(allocs []Allocation) error {
 
 func (a *Allocator) multiFreeMemory(allocs []Allocation) error {
 	for i := 0; i < len(allocs); i++ {
-		if memutils.DebugMargin > 0 {
+		if InitializeAllocs {
 			allocs[i].fillAllocation(destroyedFillPattern)
 		}
 

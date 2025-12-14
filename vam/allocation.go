@@ -550,7 +550,7 @@ func (a *Allocation) flushOrInvalidate(offset, size int, operation vulkan.CacheO
 }
 
 func (a *Allocation) fillAllocation(pattern uint8) {
-	if memutils.DebugMargin == 0 || !a.IsMappingAllowed() ||
+	if !InitializeAllocs || !a.IsMappingAllowed() ||
 		a.parentAllocator.deviceMemory.MemoryTypeProperties(a.memoryTypeIndex).PropertyFlags&core1_0.MemoryPropertyHostVisible == 0 {
 		// Don't fill allocations that can't be filled, or if memory debugging is turned off
 		return
