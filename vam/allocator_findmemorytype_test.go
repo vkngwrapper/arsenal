@@ -118,7 +118,7 @@ func TestFindMemoryTypeIndexForImageInfo(t *testing.T) {
 				setup.DeviceExtensions = []string{khr_maintenance4.ExtensionName}
 			}
 
-			_, _, device, allocator := readyAllocator(t, ctrl, setup)
+			_, _, _, device, allocator := readyAllocator(t, ctrl, setup)
 			if allocator.extensionData.Maintenance4 != nil {
 				maint4 := mock_maintenance4.NewMockExtension(ctrl)
 				allocator.extensionData.Maintenance4 = maint4
@@ -373,7 +373,7 @@ func TestFindMemoryTypeIndexForBufferInfo(t *testing.T) {
 				setup.DeviceExtensions = []string{khr_maintenance4.ExtensionName}
 			}
 
-			_, _, device, allocator := readyAllocator(t, ctrl, setup)
+			_, _, _, device, allocator := readyAllocator(t, ctrl, setup)
 			if allocator.extensionData.Maintenance4 != nil {
 				maint4 := mock_maintenance4.NewMockExtension(ctrl)
 				allocator.extensionData.Maintenance4 = maint4

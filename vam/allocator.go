@@ -438,9 +438,7 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 	}
 	a.deviceMemory.AddAllocation(a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex), size)
 
-	if InitializeAllocs {
-		alloc.fillAllocation(createdFillPattern)
-	}
+	alloc.fillAllocation(createdFillPattern)
 
 	return core1_0.VKSuccess, nil
 }
@@ -673,6 +671,14 @@ func (a *Allocator) allocateMemoryOfType(
 
 	// Try dedicated memory
 	if canAllocateDedicated && !dedicatedPreferred {
+		heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex)
+
+		budget := vulkan.Budget{}
+		a.deviceMemory.HeapBudget(heapIndex, &budget)
+		if budget.Usage+size*len(allocations) > budget.Budget {
+			return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
+		}
+
 		res, err = a.allocateDedicatedMemory(
 			pool,
 			size,
@@ -1032,9 +1038,7 @@ func (a *Allocator) FreeAllocationSlice(allocs []Allocation) error {
 
 func (a *Allocator) multiFreeMemory(allocs []Allocation) error {
 	for i := 0; i < len(allocs); i++ {
-		if InitializeAllocs {
-			allocs[i].fillAllocation(destroyedFillPattern)
-		}
+		allocs[i].fillAllocation(destroyedFillPattern)
 
 		err := a.freeSingleAllocation(&allocs[i])
 		if err != nil {

@@ -549,33 +549,6 @@ func (a *Allocation) flushOrInvalidate(offset, size int, operation vulkan.CacheO
 	return a.parentAllocator.deviceMemory.FlushOrInvalidateAllocations([]core1_0.MappedMemoryRange{memRange}, operation)
 }
 
-func (a *Allocation) fillAllocation(pattern uint8) {
-	if !InitializeAllocs || !a.IsMappingAllowed() ||
-		a.parentAllocator.deviceMemory.MemoryTypeProperties(a.memoryTypeIndex).PropertyFlags&core1_0.MemoryPropertyHostVisible == 0 {
-		// Don't fill allocations that can't be filled, or if memory debugging is turned off
-		return
-	}
-
-	data, _, err := a.Map()
-	if err != nil {
-		panic(fmt.Sprintf("failed when attempting to map memory during debug pattern fill: %+v", err))
-	}
-
-	dataSlice := ([]uint8)(unsafe.Slice((*uint8)(data), a.size))
-	for i := 0; i < a.size; i++ {
-		dataSlice[i] = pattern
-	}
-	_, err = a.flushOrInvalidate(0, common.WholeSize, vulkan.CacheOperationFlush)
-	if err != nil {
-		panic(fmt.Sprintf("failed when attempting to flush host cache during debug pattern fill: %+v", err))
-	}
-
-	err = a.Unmap()
-	if err != nil {
-		panic(fmt.Sprintf("failed when attempting to unmap memory during debug pattern fill: %+v", err))
-	}
-}
-
 func (a *Allocation) nextDedicatedAlloc() *Allocation {
 	if a.allocationType != allocationTypeDedicated {
 		panic("attempted to get the next dedicated allocation in the linked list, but this is not a dedicated allocation")

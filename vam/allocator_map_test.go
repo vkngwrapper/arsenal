@@ -18,7 +18,7 @@ import (
 func TestAllocateAndMapNonCoherent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -123,7 +123,7 @@ func TestAllocateAndMapNonCoherent(t *testing.T) {
 func TestAllocateAndMap(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -228,7 +228,7 @@ func TestAllocateAndMap(t *testing.T) {
 func TestMapDedicatedMemory(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -312,7 +312,7 @@ func TestMapDedicatedMemory(t *testing.T) {
 func TestFlushMemorySlice(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{

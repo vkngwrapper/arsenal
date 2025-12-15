@@ -40,7 +40,7 @@ func TestExtensionsNew_Core1_1(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	instance, physicalDevice, device := mocks.MockRig1_1(ctrl, common.Vulkan1_1, []string{}, []string{})
+	instance, _, physicalDevice, device := mocks.MockRig1_1(ctrl, common.Vulkan1_1, []string{}, []string{})
 
 	extension := NewExtensionData(device, physicalDevice, instance)
 
@@ -60,7 +60,7 @@ func TestExtensionsNew_Core1_2(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	instance, physicalDevice, device := mocks.MockRig1_2(ctrl, common.Vulkan1_2, []string{}, []string{})
+	instance, _, physicalDevice, device := mocks.MockRig1_2(ctrl, common.Vulkan1_2, []string{}, []string{})
 
 	extension := NewExtensionData(device, physicalDevice, instance)
 
@@ -150,7 +150,7 @@ func TestExtensionsNew_Core11_MemoryBudget(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	instance, physicalDevice, device := mocks.MockRig1_1(ctrl, common.Vulkan1_1, []string{},
+	instance, _, physicalDevice, device := mocks.MockRig1_1(ctrl, common.Vulkan1_1, []string{},
 		[]string{
 			ext_memory_budget.ExtensionName,
 		})
@@ -220,7 +220,7 @@ func TestExtensionsNew_BufferDeviceAddress(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	instance, physicalDevice, device := mocks.MockRig1_1(ctrl, common.Vulkan1_1, []string{}, []string{
+	instance, _, physicalDevice, device := mocks.MockRig1_1(ctrl, common.Vulkan1_1, []string{}, []string{
 		khr_buffer_device_address.ExtensionName,
 	})
 

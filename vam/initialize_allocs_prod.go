@@ -9,3 +9,6 @@ const (
 	// generally be left deactivated.
 	InitializeAllocs bool = false
 )
+
+func (a *Allocation) fillAllocation(pattern uint8) {
+}

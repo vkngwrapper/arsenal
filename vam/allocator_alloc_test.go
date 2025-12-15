@@ -23,10 +23,11 @@ type AllocatorSetup struct {
 	MemoryHeaps        []core1_0.MemoryHeap
 	DeviceProperties   core1_0.PhysicalDeviceProperties
 	AllocatorOptions   CreateOptions
+	PreNewMock         func(instance *mocks.Instance1_2, instancePhysDevice *mocks.InstanceScopedPhysicalDevice1_2, physDevice *mocks.PhysicalDevice1_2, device *mocks.Device1_2)
 }
 
-func readyAllocator(t *testing.T, ctrl *gomock.Controller, setup AllocatorSetup) (*mocks.Instance1_2, *mocks.PhysicalDevice1_2, *mocks.Device1_2, *Allocator) {
-	instance, physDevice, device := mocks.MockRig1_2(ctrl, setup.DeviceVersion, setup.InstanceExtensions, setup.DeviceExtensions)
+func readyAllocator(t *testing.T, ctrl *gomock.Controller, setup AllocatorSetup) (*mocks.Instance1_2, *mocks.InstanceScopedPhysicalDevice1_2, *mocks.PhysicalDevice1_2, *mocks.Device1_2, *Allocator) {
+	instance, instanceScopedPhysDevice, physDevice, device := mocks.MockRig1_2(ctrl, setup.DeviceVersion, setup.InstanceExtensions, setup.DeviceExtensions)
 
 	physDevice.EXPECT().Properties().AnyTimes().Return(&setup.DeviceProperties, nil)
 	physDevice.EXPECT().MemoryProperties().AnyTimes().Return(&core1_0.PhysicalDeviceMemoryProperties{
@@ -34,17 +35,21 @@ func readyAllocator(t *testing.T, ctrl *gomock.Controller, setup AllocatorSetup)
 		MemoryHeaps: setup.MemoryHeaps,
 	})
 
+	if setup.PreNewMock != nil {
+		setup.PreNewMock(instance, instanceScopedPhysDevice, physDevice, device)
+	}
+
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	allocator, err := New(logger, instance, physDevice, device, setup.AllocatorOptions)
 	require.NoError(t, err)
 
-	return instance, physDevice, device, allocator
+	return instance, instanceScopedPhysDevice, physDevice, device, allocator
 }
 
 func TestAllocateMemory(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -118,7 +123,7 @@ func TestAllocateMemory(t *testing.T) {
 func TestAllocateMemorySlice(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -218,7 +223,7 @@ func TestAllocateDedicatedMemory(t *testing.T) {
 		UserData: "wow",
 	}
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -301,7 +306,7 @@ func TestAllocateDedicatedMemory(t *testing.T) {
 func TestAutoAllocateDedicatedMemory(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -373,7 +378,7 @@ func TestAutoAllocateDedicatedMemory(t *testing.T) {
 func TestCreateBuffer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -464,7 +469,7 @@ func TestCreateBuffer(t *testing.T) {
 func TestAllocateForBuffer(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -545,7 +550,7 @@ func TestAllocateForBuffer(t *testing.T) {
 func TestCreateBufferWithAlignment(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -636,7 +641,7 @@ func TestCreateBufferWithAlignment(t *testing.T) {
 func TestCreateImage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -741,7 +746,7 @@ func TestCreateImage(t *testing.T) {
 func TestAllocateForImage(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -816,5 +821,91 @@ func TestAllocateForImage(t *testing.T) {
 	require.GreaterOrEqual(t, 1000, allocation.Size())
 
 	err = allocation.Free()
+	require.NoError(t, err)
+}
+
+func TestAllocateWithPool(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+		DeviceVersion: common.Vulkan1_2,
+		MemoryTypes: []core1_0.MemoryType{
+			{
+				PropertyFlags: core1_0.MemoryPropertyDeviceLocal,
+				HeapIndex:     0,
+			},
+			{
+				PropertyFlags: 0,
+				HeapIndex:     1,
+			},
+		},
+		MemoryHeaps: []core1_0.MemoryHeap{
+			{
+				Size:  1000000,
+				Flags: core1_0.MemoryHeapDeviceLocal,
+			},
+			{
+				Size:  1000000,
+				Flags: 0,
+			},
+		},
+		DeviceExtensions: []string{ext_memory_priority.ExtensionName},
+		DeviceProperties: core1_0.PhysicalDeviceProperties{
+			DriverType: core1_0.PhysicalDeviceTypeDiscreteGPU,
+			Limits: &core1_0.PhysicalDeviceLimits{
+				BufferImageGranularity:   1,
+				NonCoherentAtomSize:      1,
+				MaxMemoryAllocationCount: 1,
+			},
+		},
+		AllocatorOptions: CreateOptions{},
+	})
+
+	// Expect a block to be allocated, the default preferred size for a 1MB heap is
+	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
+	// resulting in 15628
+	memory := mocks.EasyMockDeviceMemory(ctrl)
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  15628,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0.5,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory, core1_0.VKSuccess, nil)
+	memory.EXPECT().Free(gomock.Any())
+
+	pool, _, err := allocator.CreatePool(PoolCreateInfo{
+		MemoryTypeIndex: 0,
+		Flags:           PoolCreateLinearAlgorithm,
+		Priority:        0.5,
+	})
+	require.NoError(t, err)
+
+	var allocation Allocation
+	_, err = allocator.AllocateMemory(&core1_0.MemoryRequirements{
+		Size:           1000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}, AllocationCreateInfo{
+		Usage:    MemoryUsageAuto,
+		Flags:    0,
+		Priority: 1,
+		Pool:     pool,
+	}, &allocation)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, 1000, allocation.Size())
+
+	err = allocation.Free()
+	require.NoError(t, err)
+
+	err = pool.Destroy()
 	require.NoError(t, err)
 }

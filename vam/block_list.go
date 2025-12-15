@@ -374,9 +374,6 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 				if currentBlock == nil {
 					panic(fmt.Sprintf("a memory block at index %d is unexpectedly nil", blockIndex))
 				}
-				if currentBlock.metadata.SumFreeSize() < size {
-					continue
-				}
 
 				res, err = l.allocFromBlock(currentBlock, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
 				if err != nil {
@@ -428,8 +425,12 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 		}
 
 		newBlockIndex := 0
+		var retStatus common.VkResult
 		if newBlockSize <= freeMemory || !canFallbackToDedicated {
-			newBlockIndex, _, err = l.CreateBlock(newBlockSize)
+			newBlockIndex, retStatus, err = l.CreateBlock(newBlockSize)
+		} else {
+			retStatus = core1_0.VKErrorOutOfDeviceMemory
+			err = retStatus.ToError()
 		}
 
 		if !l.explicitBlockSize {
@@ -439,7 +440,7 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 					newBlockSize = smallerNewBlockSize
 					newBlockSizeShift++
 					if newBlockSize <= freeMemory || !canFallbackToDedicated {
-						newBlockIndex, _, err = l.CreateBlock(newBlockSize)
+						newBlockIndex, retStatus, err = l.CreateBlock(newBlockSize)
 					}
 				} else {
 					break
@@ -447,19 +448,21 @@ func (l *memoryBlockList) allocPage(size int, alignment uint, createInfo *Alloca
 			}
 		}
 
-		if err == nil {
-			block := l.blocks[newBlockIndex]
-			if block.metadata.Size() < size {
-				panic(fmt.Sprintf("created a new block at index %d to hold an allocation of size %d but the created block was somehow only size %d", newBlockIndex, size, block.metadata.Size()))
-			}
+		if err != nil {
+			return retStatus, err
+		}
 
-			res, err = l.allocFromBlock(block, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
-			if err != nil {
-				return res, err
-			} else if res == core1_0.VKSuccess {
-				l.incrementallySortBlocks()
-				return res, nil
-			}
+		block := l.blocks[newBlockIndex]
+		if block.metadata.Size() < size {
+			panic(fmt.Sprintf("created a new block at index %d to hold an allocation of size %d but the created block was somehow only size %d", newBlockIndex, size, block.metadata.Size()))
+		}
+
+		res, err = l.allocFromBlock(block, size, alignment, createInfo.Flags, createInfo.UserData, suballocationType, strategy, outAlloc)
+		if err != nil {
+			return res, err
+		} else if res == core1_0.VKSuccess {
+			l.incrementallySortBlocks()
+			return res, nil
 		}
 	}
 
@@ -589,6 +592,10 @@ func (l *memoryBlockList) calcMaxBlockSize() int {
 }
 
 func (l *memoryBlockList) allocFromBlock(block *deviceMemoryBlock, size int, alignment uint, allocFlags AllocationCreateFlags, userData any, suballocType suballocationType, flags AllocationCreateFlags, outAlloc *Allocation) (common.VkResult, error) {
+	if !block.metadata.MayHaveFreeBlock(uint32(suballocType), size) {
+		return core1_0.VKErrorOutOfDeviceMemory, nil
+	}
+
 	isUpperAddress := allocFlags&AllocationCreateUpperAddress != 0
 
 	var strategy metadata.AllocationStrategy
@@ -638,9 +645,7 @@ func (l *memoryBlockList) commitAllocationRequest(allocRequest metadata.Allocati
 	heapIndex := l.deviceMemory.MemoryTypeIndexToHeapIndex(l.memoryTypeIndex)
 	l.deviceMemory.AddAllocation(heapIndex, allocRequest.Size)
 
-	if InitializeAllocs {
-		outAlloc.fillAllocation(createdFillPattern)
-	}
+	outAlloc.fillAllocation(createdFillPattern)
 
 	if l.IsCorruptionDetectionEnabled() {
 		_, err = block.WriteMagicBlockAfterAllocation(outAlloc.FindOffset(), allocRequest.Size)
