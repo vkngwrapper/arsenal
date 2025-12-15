@@ -3,9 +3,11 @@ package vam
 import (
 	"io"
 	"log/slog"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
 	"github.com/vkngwrapper/core/v2/core1_1"
@@ -908,4 +910,180 @@ func TestAllocateWithPool(t *testing.T) {
 
 	err = pool.Destroy()
 	require.NoError(t, err)
+}
+
+func TestCalculateStatistics(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+		DeviceVersion: common.Vulkan1_2,
+		MemoryTypes: []core1_0.MemoryType{
+			{
+				PropertyFlags: core1_0.MemoryPropertyDeviceLocal,
+				HeapIndex:     0,
+			},
+			{
+				PropertyFlags: 0,
+				HeapIndex:     1,
+			},
+		},
+		MemoryHeaps: []core1_0.MemoryHeap{
+			{
+				Size:  1000000,
+				Flags: core1_0.MemoryHeapDeviceLocal,
+			},
+			{
+				Size:  1000000,
+				Flags: 0,
+			},
+		},
+		DeviceExtensions: []string{ext_memory_priority.ExtensionName},
+		DeviceProperties: core1_0.PhysicalDeviceProperties{
+			DriverType: core1_0.PhysicalDeviceTypeDiscreteGPU,
+			Limits: &core1_0.PhysicalDeviceLimits{
+				BufferImageGranularity:   1,
+				NonCoherentAtomSize:      1,
+				MaxMemoryAllocationCount: 2,
+			},
+		},
+		AllocatorOptions: CreateOptions{},
+	})
+
+	// Expect a block to be allocated, the default preferred size for a 1MB heap is
+	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
+	// resulting in 15628
+	memory := mocks.EasyMockDeviceMemory(ctrl)
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  15628,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0.5,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory, core1_0.VKSuccess, nil)
+
+	var allocation Allocation
+	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
+		Size:           1000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}, AllocationCreateInfo{
+		Usage:    MemoryUsageAuto,
+		Flags:    0,
+		Priority: 1,
+	}, &allocation)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, 1000, allocation.Size())
+
+	memory2 := mocks.EasyMockDeviceMemory(ctrl)
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  1000,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 1,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory2, core1_0.VKSuccess, nil)
+
+	var allocation2 Allocation
+	_, err = allocator.AllocateMemory(&core1_0.MemoryRequirements{
+		Size:           1000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}, AllocationCreateInfo{
+		Usage:    MemoryUsageAuto,
+		Flags:    AllocationCreateDedicatedMemory,
+		Priority: 1,
+	}, &allocation2)
+	require.NoError(t, err)
+
+	var stats AllocatorStatistics
+	allocator.CalculateStatistics(&stats)
+
+	freeRangeCount := 1
+	minFreeRangeSize := 14628
+	maxFreeRangeSize := 14628
+
+	if memutils.DebugMargin > 0 {
+		freeRangeCount += 1
+		minFreeRangeSize = memutils.DebugMargin
+		maxFreeRangeSize -= memutils.DebugMargin
+	}
+
+	empty := memutils.DetailedStatistics{
+		Statistics: memutils.Statistics{
+			BlockCount:      0,
+			AllocationCount: 0,
+			BlockBytes:      0,
+			AllocationBytes: 0,
+		},
+		UnusedRangeCount:   0,
+		AllocationSizeMin:  math.MaxInt,
+		AllocationSizeMax:  0,
+		UnusedRangeSizeMin: math.MaxInt,
+		UnusedRangeSizeMax: 0,
+	}
+
+	require.Equal(t, AllocatorStatistics{
+		MemoryTypes: [common.MaxMemoryTypes]memutils.DetailedStatistics{
+			memutils.DetailedStatistics{
+				Statistics: memutils.Statistics{
+					BlockCount:      2,
+					AllocationCount: 2,
+					BlockBytes:      16628,
+					AllocationBytes: 2000,
+				},
+				UnusedRangeCount:   freeRangeCount,
+				AllocationSizeMin:  1000,
+				AllocationSizeMax:  1000,
+				UnusedRangeSizeMin: minFreeRangeSize,
+				UnusedRangeSizeMax: maxFreeRangeSize,
+			}, empty, empty, empty, empty, empty, empty, empty,
+			empty, empty, empty, empty, empty, empty, empty, empty,
+			empty, empty, empty, empty, empty, empty, empty, empty,
+			empty, empty, empty, empty, empty, empty, empty, empty,
+		},
+		MemoryHeaps: [common.MaxMemoryHeaps]memutils.DetailedStatistics{
+			memutils.DetailedStatistics{
+				Statistics: memutils.Statistics{
+					BlockCount:      2,
+					AllocationCount: 2,
+					BlockBytes:      16628,
+					AllocationBytes: 2000,
+				},
+				UnusedRangeCount:   freeRangeCount,
+				AllocationSizeMin:  1000,
+				AllocationSizeMax:  1000,
+				UnusedRangeSizeMin: minFreeRangeSize,
+				UnusedRangeSizeMax: maxFreeRangeSize,
+			}, empty, empty, empty, empty, empty, empty, empty,
+			empty, empty, empty, empty, empty, empty, empty, empty,
+		},
+		Total: memutils.DetailedStatistics{
+			Statistics: memutils.Statistics{
+				BlockCount:      2,
+				AllocationCount: 2,
+				BlockBytes:      16628,
+				AllocationBytes: 2000,
+			},
+			UnusedRangeCount:   freeRangeCount,
+			AllocationSizeMin:  1000,
+			AllocationSizeMax:  1000,
+			UnusedRangeSizeMin: minFreeRangeSize,
+			UnusedRangeSizeMax: maxFreeRangeSize,
+		},
+	}, stats)
 }

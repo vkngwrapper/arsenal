@@ -788,7 +788,11 @@ func (a *Allocator) multiAllocateMemory(
 		memoryTypeIndex, _, err = a.findMemoryTypeIndex(memoryBits, options, dedicatedBufferOrImageUsage)
 	}
 
-	return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
+	if res == core1_0.VKSuccess {
+		return core1_0.VKErrorOutOfDeviceMemory, core1_0.VKErrorOutOfDeviceMemory.ToError()
+	}
+
+	return res, res.ToError()
 }
 
 // AllocateMemory allocates memory according to provided memory requirements and AllocationCreateInfo
