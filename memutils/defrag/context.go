@@ -46,16 +46,16 @@ type DefragmentationStats struct {
 	BytesFreed int
 	// AllocationsMoved is the number of successful relocations
 	AllocationsMoved int
-	// DeviceMemoryBlocksFreed is the number of memory pages that the BlockList has chosen to free as a consequence
-	// of relocating allocations out of the block
-	DeviceMemoryBlocksFreed int
+	// AllocationsFreed is the number of allocations that the BlockList has chosen to free as a consequence
+	// of relocating allocations
+	AllocationsFreed int
 }
 
 func (s *DefragmentationStats) Add(stats DefragmentationStats) {
 	s.BytesMoved += stats.BytesMoved
 	s.BytesFreed += stats.BytesFreed
 	s.AllocationsMoved += stats.AllocationsMoved
-	s.DeviceMemoryBlocksFreed += stats.DeviceMemoryBlocksFreed
+	s.AllocationsFreed += stats.AllocationsFreed
 }
 
 // MetadataDefragContext is the core of the defragmentation logic for memutils. One of these must be created
@@ -131,7 +131,7 @@ func (c *MetadataDefragContext[T]) BlockListCompletePass(pass *PassContext) erro
 
 		c.scratchStats = memutils.Statistics{}
 		c.BlockList.AddStatistics(&c.scratchStats)
-		pass.Stats.DeviceMemoryBlocksFreed += prevCount - c.scratchStats.AllocationCount
+		pass.Stats.AllocationsFreed += prevCount - c.scratchStats.AllocationCount
 		pass.Stats.BytesFreed += prevBytes - c.scratchStats.AllocationBytes
 
 		switch move.MoveOperation {

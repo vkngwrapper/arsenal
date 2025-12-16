@@ -58,10 +58,10 @@ func TestSimpleCompletePass(t *testing.T) {
 	err := context.BlockListCompletePass(&pass)
 	require.NoError(t, err)
 	require.Equal(t, defrag.DefragmentationStats{
-		AllocationsMoved:        1,
-		BytesMoved:              100,
-		BytesFreed:              100,
-		DeviceMemoryBlocksFreed: 1,
+		AllocationsMoved: 1,
+		BytesMoved:       100,
+		BytesFreed:       100,
+		AllocationsFreed: 1,
 	}, pass.Stats)
 }
 
@@ -112,10 +112,10 @@ func TestDestroyAllocCompletePass(t *testing.T) {
 	err := context.BlockListCompletePass(&pass)
 	require.NoError(t, err)
 	require.Equal(t, defrag.DefragmentationStats{
-		AllocationsMoved:        0,
-		BytesMoved:              0,
-		BytesFreed:              200,
-		DeviceMemoryBlocksFreed: 2,
+		AllocationsMoved: 0,
+		BytesMoved:       0,
+		BytesFreed:       200,
+		AllocationsFreed: 2,
 	}, pass.Stats)
 }
 
@@ -174,9 +174,9 @@ func TestIgnoreAllocCompletePass(t *testing.T) {
 	err := context.BlockListCompletePass(&pass)
 	require.NoError(t, err)
 	require.Equal(t, defrag.DefragmentationStats{
-		AllocationsMoved:        0,
-		BytesMoved:              0,
-		BytesFreed:              100,
-		DeviceMemoryBlocksFreed: 1,
+		AllocationsMoved: 0,
+		BytesMoved:       0,
+		BytesFreed:       100,
+		AllocationsFreed: 1,
 	}, pass.Stats)
 }
