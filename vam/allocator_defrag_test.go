@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/vkngwrapper/arsenal/memutils"
+	"github.com/vkngwrapper/arsenal/memutils/defrag"
 	"github.com/vkngwrapper/core/v2/common"
 	"github.com/vkngwrapper/core/v2/core1_0"
 	"github.com/vkngwrapper/core/v2/core1_1"
@@ -114,6 +115,16 @@ func TestAllocateDefrag(t *testing.T) {
 	done, err = defragContext.EndDefragPass()
 	require.NoError(t, err)
 	require.True(t, done)
+
+	var stats defrag.DefragmentationStats
+	defragContext.Finish(&stats)
+
+	require.Equal(t, defrag.DefragmentationStats{
+		BytesMoved:       3000,
+		BytesFreed:       3000,
+		AllocationsMoved: 3,
+		AllocationsFreed: 3,
+	}, stats)
 
 	offset := allocations[1].FindOffset()
 	require.Equal(t, offset, 1000+memutils.DebugMargin)

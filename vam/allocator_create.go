@@ -1,10 +1,11 @@
 package vam
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 
-	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
@@ -204,29 +205,27 @@ func (a *Allocator) Destroy() error {
 	a.poolsMutex.Lock()
 	defer a.poolsMutex.Unlock()
 
+	var errs []error
+
 	for memoryTypeIndex := 0; memoryTypeIndex < a.deviceMemory.MemoryTypeCount(); memoryTypeIndex++ {
 		if a.dedicatedAllocations[memoryTypeIndex] != nil {
 			memutils.DebugValidate(a.dedicatedAllocations[memoryTypeIndex])
 			if !a.dedicatedAllocations[memoryTypeIndex].IsEmpty() {
-				return errors.Errorf("the allocator still has %d unfreed dedicated allocations for memory type %d", a.dedicatedAllocations[memoryTypeIndex].count, memoryTypeIndex)
+				errs = append(errs, fmt.Errorf("the allocator still has %d unfreed dedicated allocations for memory type %d", a.dedicatedAllocations[memoryTypeIndex].count, memoryTypeIndex))
 			}
-		}
-
-		if a.memoryBlockLists[memoryTypeIndex] != nil && !a.memoryBlockLists[memoryTypeIndex].HasNoAllocations() {
-			return errors.Errorf("the allocator still has unfreed block allocations for memory type %d", memoryTypeIndex)
 		}
 	}
 
 	if a.pools != nil {
-		return errors.Errorf("the allocator still has active pools that must be destroyed")
+		errs = append(errs, fmt.Errorf("the allocator still has active pools that must be destroyed"))
 	}
 
 	for memoryTypeIndex := 0; memoryTypeIndex < a.deviceMemory.MemoryTypeCount(); memoryTypeIndex++ {
 		err := a.memoryBlockLists[memoryTypeIndex].Destroy()
 		if err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }

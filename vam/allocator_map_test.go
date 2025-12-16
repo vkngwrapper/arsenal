@@ -120,6 +120,112 @@ func TestAllocateAndMapNonCoherent(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestAllocateAndMapDedicatedNonCoherent(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+		DeviceVersion: common.Vulkan1_2,
+		MemoryTypes: []core1_0.MemoryType{
+			{
+				PropertyFlags: core1_0.MemoryPropertyDeviceLocal | core1_0.MemoryPropertyHostVisible | core1_0.MemoryPropertyHostCached,
+				HeapIndex:     0,
+			},
+			{
+				PropertyFlags: 0,
+				HeapIndex:     1,
+			},
+		},
+		MemoryHeaps: []core1_0.MemoryHeap{
+			{
+				Size:  1000000,
+				Flags: core1_0.MemoryHeapDeviceLocal,
+			},
+			{
+				Size:  1000000,
+				Flags: 0,
+			},
+		},
+		DeviceExtensions: []string{ext_memory_priority.ExtensionName},
+		DeviceProperties: core1_0.PhysicalDeviceProperties{
+			DriverType: core1_0.PhysicalDeviceTypeDiscreteGPU,
+			Limits: &core1_0.PhysicalDeviceLimits{
+				BufferImageGranularity:   1,
+				NonCoherentAtomSize:      1,
+				MaxMemoryAllocationCount: 1,
+			},
+		},
+		AllocatorOptions: CreateOptions{},
+	})
+
+	// Expect a block to be allocated, the default preferred size for a 1MB heap is
+	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
+	// resulting in 15628
+	memory := mocks.EasyMockDeviceMemory(ctrl)
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  1000,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory, core1_0.VKSuccess, nil)
+	memory.EXPECT().Free(nil)
+
+	data := make([]byte, 1000)
+	dataPtr := unsafe.Pointer(&data[0])
+
+	memory.EXPECT().Map(0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
+	device.EXPECT().FlushMappedMemoryRanges([]core1_0.MappedMemoryRange{
+		{
+			Memory: memory,
+			Offset: 0,
+			Size:   500,
+		},
+	}).Return(core1_0.VKSuccess, nil)
+	device.EXPECT().InvalidateMappedMemoryRanges([]core1_0.MappedMemoryRange{
+		{
+			Memory: memory,
+			Offset: 500,
+			Size:   500,
+		},
+	}).Return(core1_0.VKSuccess, nil)
+	memory.EXPECT().Unmap()
+
+	var allocation Allocation
+	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
+		Size:           1000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}, AllocationCreateInfo{
+		Usage: MemoryUsageAutoPreferDevice,
+		Flags: AllocationCreateHostAccessRandom | AllocationCreateDedicatedMemory,
+	}, &allocation)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, 1000, allocation.Size())
+
+	_, _, err = allocation.Map()
+	require.NoError(t, err)
+
+	_, err = allocation.Flush(0, 500)
+	require.NoError(t, err)
+
+	_, err = allocation.Invalidate(500, 500)
+	require.NoError(t, err)
+
+	err = allocation.Unmap()
+	require.NoError(t, err)
+
+	err = allocation.Free()
+	require.NoError(t, err)
+}
+
 func TestAllocateAndMap(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
@@ -285,6 +391,13 @@ func TestAllocatePersistentMap(t *testing.T) {
 	dataPtr := unsafe.Pointer(&data[0])
 
 	memory.EXPECT().Map(0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
+
+	if memutils.DebugMargin == 0 {
+		// The extra map/unmap calls for writing the debug margins
+		// and reading them will force this into persistent map
+		// and prevent unmap
+		memory.EXPECT().Unmap()
+	}
 
 	var allocation Allocation
 	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{

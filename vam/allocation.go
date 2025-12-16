@@ -727,7 +727,7 @@ func (a *Allocation) createAliasingBuffer(offset int, bufferInfo *core1_0.Buffer
 
 	if bufferInfo.Size == 0 {
 		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create a buffer of 0 size")
-	} else if offset+bufferInfo.Size <= a.Size() {
+	} else if offset+bufferInfo.Size > a.Size() {
 		return nil, core1_0.VKErrorUnknown, errors.Errorf("attempted to create a buffer that was too big to fit in its allocation: offset %d, size %d, buffer would have ended at %d but allocation is only %d bytes", offset, bufferInfo.Size, offset+bufferInfo.Size, a.Size())
 	} else if bufferInfo.Usage&khr_buffer_device_address.BufferUsageShaderDeviceAddress != 0 && a.parentAllocator.extensionData.BufferDeviceAddress == nil {
 		return nil, core1_0.VKErrorExtensionNotPresent, errors.New("attempted to use BufferUsageShaderDeviceAddress, but khr_buffer_device_address is not loaded")

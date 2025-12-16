@@ -103,6 +103,7 @@ func TestAllocateMemory(t *testing.T) {
 			},
 		},
 	}).Return(memory, core1_0.VKSuccess, nil)
+	memory.EXPECT().Free(nil)
 
 	var allocation Allocation
 	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
@@ -120,6 +121,83 @@ func TestAllocateMemory(t *testing.T) {
 
 	err = allocation.Free()
 	require.NoError(t, err)
+
+	err = allocator.Destroy()
+	require.NoError(t, err)
+}
+
+func TestAllocateMemoryDestroyWithoutFree(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+		DeviceVersion: common.Vulkan1_2,
+		MemoryTypes: []core1_0.MemoryType{
+			{
+				PropertyFlags: core1_0.MemoryPropertyDeviceLocal,
+				HeapIndex:     0,
+			},
+			{
+				PropertyFlags: 0,
+				HeapIndex:     1,
+			},
+		},
+		MemoryHeaps: []core1_0.MemoryHeap{
+			{
+				Size:  1000000,
+				Flags: core1_0.MemoryHeapDeviceLocal,
+			},
+			{
+				Size:  1000000,
+				Flags: 0,
+			},
+		},
+		DeviceExtensions: []string{ext_memory_priority.ExtensionName},
+		DeviceProperties: core1_0.PhysicalDeviceProperties{
+			DriverType: core1_0.PhysicalDeviceTypeDiscreteGPU,
+			Limits: &core1_0.PhysicalDeviceLimits{
+				BufferImageGranularity:   1,
+				NonCoherentAtomSize:      1,
+				MaxMemoryAllocationCount: 1,
+			},
+		},
+		AllocatorOptions: CreateOptions{},
+	})
+
+	// Expect a block to be allocated, the default preferred size for a 1MB heap is
+	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
+	// resulting in 15628
+	memory := mocks.EasyMockDeviceMemory(ctrl)
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  15628,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0.5,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory, core1_0.VKSuccess, nil)
+
+	var allocation Allocation
+	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
+		Size:           1000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}, AllocationCreateInfo{
+		Usage:    MemoryUsageAuto,
+		Flags:    0,
+		Priority: 1,
+	}, &allocation)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, 1000, allocation.Size())
+
+	err = allocator.Destroy()
+	require.Error(t, err)
 }
 
 func TestAllocateMemorySlice(t *testing.T) {
@@ -177,6 +255,7 @@ func TestAllocateMemorySlice(t *testing.T) {
 			},
 		},
 	}).Return(memory, core1_0.VKSuccess, nil)
+	memory.EXPECT().Free(nil)
 
 	allocations := make([]Allocation, 10)
 	_, err := allocator.AllocateMemorySlice(&core1_0.MemoryRequirements{
@@ -193,6 +272,9 @@ func TestAllocateMemorySlice(t *testing.T) {
 	require.GreaterOrEqual(t, 1000, allocations[0].Size())
 
 	err = allocator.FreeAllocationSlice(allocations)
+	require.NoError(t, err)
+
+	err = allocator.Destroy()
 	require.NoError(t, err)
 }
 
@@ -905,10 +987,31 @@ func TestAllocateWithPool(t *testing.T) {
 
 	require.GreaterOrEqual(t, 1000, allocation.Size())
 
+	var allocation2 Allocation
+	_, err = allocator.AllocateMemory(&core1_0.MemoryRequirements{
+		Size:           1000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}, AllocationCreateInfo{
+		Usage:    MemoryUsageAuto,
+		Flags:    0,
+		Priority: 1,
+		Pool:     pool,
+	}, &allocation2)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, 1000, allocation2.Size())
+
 	err = allocation.Free()
 	require.NoError(t, err)
 
+	err = allocation2.Free()
+	require.NoError(t, err)
+
 	err = pool.Destroy()
+	require.NoError(t, err)
+
+	err = allocator.Destroy()
 	require.NoError(t, err)
 }
 
@@ -1086,4 +1189,436 @@ func TestCalculateStatistics(t *testing.T) {
 			UnusedRangeSizeMax: maxFreeRangeSize,
 		},
 	}, stats)
+}
+
+func TestCreateAliasingImage(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+		DeviceVersion: common.Vulkan1_2,
+		MemoryTypes: []core1_0.MemoryType{
+			{
+				PropertyFlags: core1_0.MemoryPropertyDeviceLocal,
+				HeapIndex:     0,
+			},
+			{
+				PropertyFlags: 0,
+				HeapIndex:     1,
+			},
+		},
+		MemoryHeaps: []core1_0.MemoryHeap{
+			{
+				Size:  1000000,
+				Flags: core1_0.MemoryHeapDeviceLocal,
+			},
+			{
+				Size:  1000000,
+				Flags: 0,
+			},
+		},
+		DeviceExtensions: []string{ext_memory_priority.ExtensionName},
+		DeviceProperties: core1_0.PhysicalDeviceProperties{
+			DriverType: core1_0.PhysicalDeviceTypeDiscreteGPU,
+			Limits: &core1_0.PhysicalDeviceLimits{
+				BufferImageGranularity:   1,
+				NonCoherentAtomSize:      1,
+				MaxMemoryAllocationCount: 1,
+			},
+		},
+		AllocatorOptions: CreateOptions{},
+	})
+
+	memory := mocks.EasyMockDeviceMemory(ctrl)
+	// Expect a block to be allocated, the default preferred size for a 1MB heap is
+	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
+	// resulting in 15628
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  15628,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0.5,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory, core1_0.VKSuccess, nil)
+
+	mockBuffer := mocks.EasyMockBuffer(ctrl)
+	device.EXPECT().CreateBuffer(gomock.Any(), core1_0.BufferCreateInfo{
+		Size:  1000,
+		Usage: core1_0.BufferUsageStorageBuffer,
+	}).Return(mockBuffer, core1_0.VKSuccess, nil)
+	mockBuffer.EXPECT().BindBufferMemory(memory, 0).Return(core1_0.VKSuccess, nil)
+	mockBuffer.EXPECT().Destroy(gomock.Any())
+
+	mockImage := mocks.EasyMockImage(ctrl)
+	device.EXPECT().CreateImage(gomock.Any(), core1_0.ImageCreateInfo{
+		Usage:  core1_0.ImageUsageStorage,
+		Format: core1_0.FormatA1R5G5B5UnsignedNormalizedPacked,
+		Extent: core1_0.Extent3D{
+			Width:  100,
+			Height: 100,
+			Depth:  1,
+		},
+		MipLevels:   1,
+		ArrayLayers: 1,
+	}).Return(mockImage, core1_0.VKSuccess, nil)
+	mockImage.EXPECT().BindImageMemory(memory, 0).Return(core1_0.VKSuccess, nil)
+	mockImage.EXPECT().Destroy(gomock.Any())
+
+	device.EXPECT().BufferMemoryRequirements2(core1_1.BufferMemoryRequirementsInfo2{
+		Buffer: mockBuffer,
+	}, gomock.Any()).DoAndReturn(func(info core1_1.BufferMemoryRequirementsInfo2, out *core1_1.MemoryRequirements2) error {
+		out.MemoryRequirements = core1_0.MemoryRequirements{
+			Size:           1000,
+			Alignment:      1,
+			MemoryTypeBits: 0xffffffff,
+		}
+		return nil
+	})
+
+	var allocation Allocation
+	buffer, _, err := allocator.CreateBuffer(core1_0.BufferCreateInfo{
+		Size:  1000,
+		Usage: core1_0.BufferUsageStorageBuffer,
+	}, AllocationCreateInfo{
+		Usage: MemoryUsageAuto,
+	}, &allocation)
+	require.NoError(t, err)
+	require.Equal(t, mockBuffer, buffer)
+
+	require.GreaterOrEqual(t, 1000, allocation.Size())
+
+	image, _, err := allocation.CreateAliasingImageWithOffset(0, core1_0.ImageCreateInfo{
+		Usage:  core1_0.ImageUsageStorage,
+		Format: core1_0.FormatA1R5G5B5UnsignedNormalizedPacked,
+		Extent: core1_0.Extent3D{
+			Width:  100,
+			Height: 100,
+			Depth:  1,
+		},
+		MipLevels:   1,
+		ArrayLayers: 1,
+	})
+	require.NoError(t, err)
+
+	image.Destroy(nil)
+	err = allocation.DestroyBuffer(buffer)
+	require.NoError(t, err)
+}
+
+func TestCreateAliasingBuffer(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+		DeviceVersion: common.Vulkan1_2,
+		MemoryTypes: []core1_0.MemoryType{
+			{
+				PropertyFlags: core1_0.MemoryPropertyDeviceLocal,
+				HeapIndex:     0,
+			},
+			{
+				PropertyFlags: 0,
+				HeapIndex:     1,
+			},
+		},
+		MemoryHeaps: []core1_0.MemoryHeap{
+			{
+				Size:  1000000,
+				Flags: core1_0.MemoryHeapDeviceLocal,
+			},
+			{
+				Size:  1000000,
+				Flags: 0,
+			},
+		},
+		DeviceExtensions: []string{ext_memory_priority.ExtensionName},
+		DeviceProperties: core1_0.PhysicalDeviceProperties{
+			DriverType: core1_0.PhysicalDeviceTypeDiscreteGPU,
+			Limits: &core1_0.PhysicalDeviceLimits{
+				BufferImageGranularity:   1,
+				NonCoherentAtomSize:      1,
+				MaxMemoryAllocationCount: 1,
+			},
+		},
+		AllocatorOptions: CreateOptions{},
+	})
+
+	memory := mocks.EasyMockDeviceMemory(ctrl)
+	// Expect a block to be allocated, the default preferred size for a 1MB heap is
+	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
+	// resulting in 15628
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  15628,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0.5,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory, core1_0.VKSuccess, nil)
+
+	mockImage := mocks.EasyMockImage(ctrl)
+	device.EXPECT().CreateImage(gomock.Any(), core1_0.ImageCreateInfo{
+		Usage:  core1_0.ImageUsageStorage,
+		Format: core1_0.FormatA1R5G5B5UnsignedNormalizedPacked,
+		Extent: core1_0.Extent3D{
+			Width:  100,
+			Height: 100,
+			Depth:  1,
+		},
+		MipLevels:   1,
+		ArrayLayers: 1,
+	}).Return(mockImage, core1_0.VKSuccess, nil)
+	mockImage.EXPECT().BindImageMemory(memory, 0).Return(core1_0.VKSuccess, nil)
+	mockImage.EXPECT().Destroy(gomock.Any())
+
+	mockBuffer := mocks.EasyMockBuffer(ctrl)
+	device.EXPECT().CreateBuffer(gomock.Any(), core1_0.BufferCreateInfo{
+		Usage: core1_0.BufferUsageStorageBuffer,
+		Size:  500,
+	}).Return(mockBuffer, core1_0.VKSuccess, nil)
+	mockBuffer.EXPECT().BindBufferMemory(memory, 100).Return(core1_0.VKSuccess, nil)
+	mockBuffer.EXPECT().Destroy(nil)
+
+	device.EXPECT().ImageMemoryRequirements2(core1_1.ImageMemoryRequirementsInfo2{
+		Image: mockImage,
+	}, gomock.Any()).DoAndReturn(func(info core1_1.ImageMemoryRequirementsInfo2, out *core1_1.MemoryRequirements2) error {
+		out.MemoryRequirements = core1_0.MemoryRequirements{
+			Size:           1000,
+			Alignment:      1,
+			MemoryTypeBits: 0xffffffff,
+		}
+		return nil
+	})
+
+	var allocation Allocation
+	image, _, err := allocator.CreateImage(core1_0.ImageCreateInfo{
+		Usage:  core1_0.ImageUsageStorage,
+		Format: core1_0.FormatA1R5G5B5UnsignedNormalizedPacked,
+		Extent: core1_0.Extent3D{
+			Width:  100,
+			Height: 100,
+			Depth:  1,
+		},
+		MipLevels:   1,
+		ArrayLayers: 1,
+	}, AllocationCreateInfo{
+		Usage: MemoryUsageAuto,
+	}, &allocation)
+	require.NoError(t, err)
+	require.Equal(t, mockImage, image)
+
+	require.GreaterOrEqual(t, 1000, allocation.Size())
+
+	buffer, _, err := allocation.CreateAliasingBufferWithOffset(100, core1_0.BufferCreateInfo{
+		Size:  500,
+		Usage: core1_0.BufferUsageStorageBuffer,
+	})
+	require.NoError(t, err)
+
+	buffer.Destroy(nil)
+	err = allocation.DestroyImage(image)
+	require.NoError(t, err)
+}
+
+func TestAllocateMultipleBlocks(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+		DeviceVersion: common.Vulkan1_2,
+		MemoryTypes: []core1_0.MemoryType{
+			{
+				PropertyFlags: core1_0.MemoryPropertyDeviceLocal,
+				HeapIndex:     0,
+			},
+			{
+				PropertyFlags: 0,
+				HeapIndex:     1,
+			},
+		},
+		MemoryHeaps: []core1_0.MemoryHeap{
+			{
+				Size:  64000,
+				Flags: core1_0.MemoryHeapDeviceLocal,
+			},
+			{
+				Size:  64000,
+				Flags: 0,
+			},
+		},
+		DeviceExtensions: []string{ext_memory_priority.ExtensionName},
+		DeviceProperties: core1_0.PhysicalDeviceProperties{
+			DriverType: core1_0.PhysicalDeviceTypeDiscreteGPU,
+			Limits: &core1_0.PhysicalDeviceLimits{
+				BufferImageGranularity:   1,
+				NonCoherentAtomSize:      1,
+				MaxMemoryAllocationCount: 3,
+			},
+		},
+		AllocatorOptions: CreateOptions{},
+	})
+
+	// Expect a block to be allocated, the default preferred size for a 32KB heap is
+	// 8KB but it will size down by half 3 times because the allocation is so small
+	// resulting in 2000
+	memory := mocks.EasyMockDeviceMemory(ctrl)
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  2000,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0.5,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory, core1_0.VKSuccess, nil)
+	memory.EXPECT().Free(nil)
+
+	// The second block will be double sized, so 4KB
+	memory2 := mocks.EasyMockDeviceMemory(ctrl)
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  4000,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0.5,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory2, core1_0.VKSuccess, nil)
+	memory2.EXPECT().Free(nil)
+
+	// The third block will be double sized again, so 8KB
+	memory3 := mocks.EasyMockDeviceMemory(ctrl)
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  8000,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0.5,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory3, core1_0.VKSuccess, nil)
+	memory3.EXPECT().Free(nil)
+
+	allocations := make([]Allocation, 10)
+	_, err := allocator.AllocateMemorySlice(&core1_0.MemoryRequirements{
+		Size:           1000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}, AllocationCreateInfo{
+		Usage:    MemoryUsageAuto,
+		Flags:    0,
+		Priority: 1,
+	}, allocations)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, 1000, allocations[0].Size())
+
+	err = allocator.FreeAllocationSlice(allocations)
+	require.NoError(t, err)
+
+	err = allocator.Destroy()
+	require.NoError(t, err)
+}
+
+func TestAllocateMemoryMinTime(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
+	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+		DeviceVersion: common.Vulkan1_2,
+		MemoryTypes: []core1_0.MemoryType{
+			{
+				PropertyFlags: core1_0.MemoryPropertyDeviceLocal,
+				HeapIndex:     0,
+			},
+			{
+				PropertyFlags: 0,
+				HeapIndex:     1,
+			},
+		},
+		MemoryHeaps: []core1_0.MemoryHeap{
+			{
+				Size:  1000000,
+				Flags: core1_0.MemoryHeapDeviceLocal,
+			},
+			{
+				Size:  1000000,
+				Flags: 0,
+			},
+		},
+		DeviceExtensions: []string{ext_memory_priority.ExtensionName},
+		DeviceProperties: core1_0.PhysicalDeviceProperties{
+			DriverType: core1_0.PhysicalDeviceTypeDiscreteGPU,
+			Limits: &core1_0.PhysicalDeviceLimits{
+				BufferImageGranularity:   1,
+				NonCoherentAtomSize:      1,
+				MaxMemoryAllocationCount: 1,
+			},
+		},
+		AllocatorOptions: CreateOptions{},
+	})
+
+	// Expect a block to be allocated, the default preferred size for a 1MB heap is
+	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
+	// resulting in 15628
+	memory := mocks.EasyMockDeviceMemory(ctrl)
+	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+		MemoryTypeIndex: 0,
+		AllocationSize:  15628,
+		NextOptions: common.NextOptions{
+			Next: ext_memory_priority.MemoryPriorityAllocateInfo{
+				Priority: 0.5,
+				NextOptions: common.NextOptions{
+					Next: core1_1.MemoryAllocateFlagsInfo{
+						Flags: core1_2.MemoryAllocateDeviceAddress,
+					},
+				},
+			},
+		},
+	}).Return(memory, core1_0.VKSuccess, nil)
+	memory.EXPECT().Free(nil)
+
+	var allocation Allocation
+	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
+		Size:           1000,
+		Alignment:      1,
+		MemoryTypeBits: 0xffffffff,
+	}, AllocationCreateInfo{
+		Usage:    MemoryUsageAuto,
+		Flags:    AllocationCreateStrategyMinTime,
+		Priority: 1,
+	}, &allocation)
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, 1000, allocation.Size())
+
+	err = allocation.Free()
+	require.NoError(t, err)
+
+	err = allocator.Destroy()
+	require.NoError(t, err)
 }

@@ -5,8 +5,8 @@ go 1.25
 require (
 	github.com/launchdarkly/go-jsonstream/v3 v3.1.0
 	github.com/pkg/errors v0.9.1
-	github.com/stretchr/testify v1.9.0
-	github.com/vkngwrapper/arsenal/memutils v1.1.0
+	github.com/stretchr/testify v1.11.1
+	github.com/vkngwrapper/arsenal/memutils v1.1.1
 	github.com/vkngwrapper/core/v2 v2.2.3
 	github.com/vkngwrapper/extensions/v2 v2.2.1
 	go.uber.org/mock v0.6.0

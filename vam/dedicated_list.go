@@ -46,21 +46,6 @@ func (l *dedicatedAllocationList) AddDetailedStatistics(stats *memutils.Detailed
 	}
 }
 
-func (l *dedicatedAllocationList) AddStatistics(stats *memutils.Statistics) {
-	l.mutex.RLock()
-	defer l.mutex.RUnlock()
-
-	allocCount := l.count
-	stats.BlockCount += allocCount
-	stats.AllocationCount += allocCount
-
-	for item := l.allocationListHead; item != nil; item = item.nextDedicatedAlloc() {
-		size := item.size
-		stats.BlockBytes += size
-		stats.AllocationCount += size
-	}
-}
-
 func (l *dedicatedAllocationList) BuildStatsString(writer *jwriter.Writer) {
 	l.mutex.RLock()
 	defer l.mutex.RUnlock()

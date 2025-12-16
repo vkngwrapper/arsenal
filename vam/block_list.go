@@ -152,26 +152,6 @@ func (l *memoryBlockList) AddDetailedStatistics(stats *memutils.DetailedStatisti
 	}
 }
 
-func (l *memoryBlockList) IsEmpty() bool {
-	l.mutex.RLock()
-	defer l.mutex.RUnlock()
-
-	return len(l.blocks) == 0
-}
-
-func (l *memoryBlockList) HasNoAllocations() bool {
-	l.mutex.RLock()
-	defer l.mutex.RUnlock()
-
-	for blockIndex := 0; blockIndex < len(l.blocks); blockIndex++ {
-		if !l.blocks[blockIndex].metadata.IsEmpty() {
-			return false
-		}
-	}
-
-	return true
-}
-
 func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, error) {
 	if l.priority < 0 || l.priority > 1 {
 		panic(fmt.Sprintf("block list had an invalid priority value %f somehow: priority values should be between 0 and 1, inclusive", l.priority))
