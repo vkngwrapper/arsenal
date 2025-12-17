@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/bits"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/dolthub/swiss"
@@ -66,11 +65,14 @@ type TLSFBlockMetadata struct {
 	memoryClasses     int
 	innerIsFreeBitmap [maxMemoryClasses]uint32
 
-	nextAllocationHandle atomic.Uint64
-	handleKey            *swiss.Map[BlockAllocationHandle, *tlsfBlock]
-	freeList             []*tlsfBlock
-	nullBlock            *tlsfBlock
-	tailBlock            *tlsfBlock
+	// For speed reasons, we use the tlsfblock pointer itself as the BlockAllocationHandle (that's how it's
+	// done in C too).  However, if we don't store tlsfBlock somewhere, go will garbage collect it, so
+	// we use this map.  We just store it in here for safekeeping and then delete it when the block is getting
+	// deleted
+	handleKey *swiss.Map[BlockAllocationHandle, *tlsfBlock]
+	freeList  []*tlsfBlock
+	nullBlock *tlsfBlock
+	tailBlock *tlsfBlock
 }
 
 var _ BlockMetadata = &TLSFBlockMetadata{}
@@ -92,7 +94,7 @@ func (m *TLSFBlockMetadata) allocateBlock() *tlsfBlock {
 	b.nextFree = nil
 	b.prevFree = nil
 	b.userData = nil
-	b.blockHandle = BlockAllocationHandle(m.nextAllocationHandle.Add(1))
+	b.blockHandle = BlockAllocationHandle(uintptr(unsafe.Pointer(b)))
 	m.handleKey.Put(b.blockHandle, b)
 	return b
 }
@@ -103,11 +105,7 @@ func (m *TLSFBlockMetadata) freeBlock(b *tlsfBlock) {
 }
 
 func (m *TLSFBlockMetadata) getBlock(handle BlockAllocationHandle) (*tlsfBlock, error) {
-	block, ok := m.handleKey.Get(handle)
-	if !ok {
-		return nil, errors.New("received a handle that was incompatible with this metadata")
-	}
-	return block, nil
+	return (*tlsfBlock)(unsafe.Pointer(uintptr(handle))), nil
 }
 
 // Init prepares this structure for allocations and sizes the block in bytes based on the parameter size.
