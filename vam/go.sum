@@ -27,8 +27,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/vkngwrapper/arsenal/memutils v1.1.1 h1:TqgepoV0nt9hky31Fvkz3PL5YTQuKCA6pwatLVdBesM=
-github.com/vkngwrapper/arsenal/memutils v1.1.1/go.mod h1:1adWUUI6oj6xwOdlfp2B+C/9fNTuf8Ozaz1xp8CPwGk=
+github.com/vkngwrapper/arsenal/memutils v1.1.2 h1:rKgNEleetRI4iG7pNhD21/Nw09VW4N5TtUr6RnM3wn4=
+github.com/vkngwrapper/arsenal/memutils v1.1.2/go.mod h1:1adWUUI6oj6xwOdlfp2B+C/9fNTuf8Ozaz1xp8CPwGk=
 github.com/vkngwrapper/core/v2 v2.2.3 h1:YqV+S+ywZ7HtBGGicIDIGprBId1KTFFvxoAQSFJYQLQ=
 github.com/vkngwrapper/core/v2 v2.2.3/go.mod h1:3F5gRWiRbbsEH3DPp67sezuP+4+m3fDEDYoWymd2N0I=
 github.com/vkngwrapper/extensions/v2 v2.2.1 h1:gWofZrduJj4maY2zVXo0kOuugTdXbuuEtf9Fmkt3tpU=

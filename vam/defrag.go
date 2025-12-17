@@ -3,8 +3,6 @@ package vam
 import (
 	"fmt"
 	"math"
-	"sync"
-	"unsafe"
 
 	"log/slog"
 
@@ -58,26 +56,6 @@ type DefragmentationInfo struct {
 	// of relocations is almost a direct proxy for the number of go allocations made, this is an important value
 	// for managing go memory throughput and CPU usage spent on the defragmentation process.
 	MaxAllocationsPerPass int
-}
-
-type lockOperation struct {
-	alloc     *Allocation
-	waitGroup *sync.WaitGroup
-}
-
-var lockAllocationChan = make(chan lockOperation, 50)
-
-func asyncLockMutexes() {
-	for lockOp := range lockAllocationChan {
-		lockOp.alloc.mapLock.Lock()
-		lockOp.waitGroup.Done()
-	}
-}
-
-func init() {
-	for i := 0; i < 5; i++ {
-		go asyncLockMutexes()
-	}
 }
 
 // DefragmentationContext is an object that represents a single run of the defragmentation algorithm, although
@@ -196,19 +174,6 @@ func (c *DefragmentationContext) BeginDefragPass() []defrag.DefragmentationMove[
 		}
 	}
 
-	var wg sync.WaitGroup
-	for _, move := range moves {
-		// Waiting on several goroutines that will live like 100ns is slow, so only do this async if
-		// there's actually something to wait on
-		if !move.SrcAllocation.mapLock.TryLock() {
-			wg.Add(1)
-			lockAllocationChan <- lockOperation{
-				alloc:     move.SrcAllocation,
-				waitGroup: &wg,
-			}
-		}
-	}
-	wg.Wait()
 	return moves
 }
 
@@ -253,23 +218,26 @@ func (c *DefragmentationContext) Finish(outStats *defrag.DefragmentationStats) {
 	}
 }
 
+func (c *DefragmentationContext) swapBlock(move defrag.DefragmentationMove[Allocation]) error {
+	move.SrcAllocation.mapLock.Lock()
+	defer move.SrcAllocation.mapLock.Unlock()
+
+	return move.SrcAllocation.swapBlockAllocation(move.DstTmpAllocation)
+}
+
 func (c *DefragmentationContext) completePassForMove(move defrag.DefragmentationMove[Allocation]) error {
 	switch move.MoveOperation {
 	case defrag.DefragmentationMoveCopy:
-		err := move.SrcAllocation.swapBlockAllocation(move.DstTmpAllocation)
-		move.SrcAllocation.mapLock.Unlock()
+		err := c.swapBlock(move)
 		if err != nil {
 			return err
 		}
 
 	case defrag.DefragmentationMoveDestroy:
-		move.SrcAllocation.mapLock.Unlock()
 		err := move.SrcAllocation.free()
 		if err != nil {
 			panic(fmt.Sprintf("failed to free source allocation on Destroy move: %+v", err))
 		}
-	default:
-		move.SrcAllocation.mapLock.Unlock()
 	}
 
 	err := move.DstTmpAllocation.free()
@@ -278,18 +246,4 @@ func (c *DefragmentationContext) completePassForMove(move defrag.Defragmentation
 	}
 
 	return nil
-}
-
-// MapSourceAllocation is roughly equivalent to calling Allocation.Map- however, Allocation.Map cannot be called
-// on an Allocation object in the midst of being relocated as part of a defragmentation pass, because
-// a write lock has been taken out on the Allocation. If it is necessary to map data as part of the relocation
-// process, use this method. Because this ignores Allocation thread-safety primitives, calling this on
-// an Allocation that is not currently being relocated by this DefragmentationContext is dangerous.
-func (c *DefragmentationContext) MapSourceAllocation(alloc *Allocation) (unsafe.Pointer, common.VkResult, error) {
-	return alloc.mapOptionalLock(false)
-}
-
-// UnmapSourceAllocation should be called after MapSourceAllocation to clean up the mapping
-func (c *DefragmentationContext) UnmapSourceAllocation(alloc *Allocation) error {
-	return alloc.memory.Unmap(1)
 }
