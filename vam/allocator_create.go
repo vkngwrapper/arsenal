@@ -9,10 +9,11 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/driver"
-	"github.com/vkngwrapper/extensions/v2/khr_external_memory_capabilities"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/core/v3/loader"
+	"github.com/vkngwrapper/extensions/v3/khr_external_memory_capabilities"
+	"github.com/vkngwrapper/extensions/v3/library"
 )
 
 // CreateFlags indicate specific allocator behaviors to activate or deactivate
@@ -56,7 +57,7 @@ type CreateOptions struct {
 	// VulkanCallbacks is an optional set of callbacks that will be executed from Vulkan on memory
 	// created from this allocator. Allocations & frees performed by this allocator do not map 1:1
 	// with allocations & frees performed by Vulkan, so these will not always be called
-	VulkanCallbacks *driver.AllocationCallbacks
+	VulkanCallbacks *loader.AllocationCallbacks
 
 	// MemoryCallbackOptions is an optional set of callbacks that will be executed when Vulkan memory
 	// is allocated from this Allocator. It can be helpful in cases when the consumer requires allocator-
@@ -79,6 +80,11 @@ type CreateOptions struct {
 	// memory, or a memory handle type, indicating which type of memory handles to use for
 	// the memory type
 	ExternalMemoryHandleTypes []khr_external_memory_capabilities.ExternalMemoryHandleTypeFlags
+
+	// ExtensionLibrary can be left empty.  if it is provided, though, it will be used to instantiate
+	// extension drivers that VAM needs.  It is a reasonable use of this field to leave it unset except when
+	// providing a mock during tests.
+	ExtensionLibrary library.Library
 }
 
 // New creates a new Allocator
@@ -93,16 +99,22 @@ type CreateOptions struct {
 // device - The Device that memory will be allocated into
 //
 // options - Optional parameters: it is valid to leave all the fields blank
-func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.PhysicalDevice, device core1_0.Device, options CreateOptions) (*Allocator, error) {
+func New(logger *slog.Logger, driver core1_0.CoreDeviceDriver, physicalDevice core1_0.PhysicalDevice, options CreateOptions) (*Allocator, error) {
 	useMutex := options.Flags&AllocatorCreateExternallySynchronized == 0
+
+	extensionLibrary := options.ExtensionLibrary
+	if extensionLibrary == nil {
+		extensionLibrary = library.NewLibrary()
+	}
 
 	allocator := &Allocator{
 		useMutex:            useMutex,
 		logger:              logger,
-		instance:            instance,
+		instance:            driver.InstanceDriver().Instance(),
 		physicalDevice:      physicalDevice,
-		device:              device,
-		extensionData:       vulkan.NewExtensionData(device, physicalDevice, instance),
+		device:              driver.Device(),
+		driver:              driver,
+		extensionData:       vulkan.NewExtensionData(driver, extensionLibrary),
 		allocationCallbacks: options.VulkanCallbacks,
 
 		createFlags:                      options.Flags,
@@ -119,7 +131,7 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 	}
 
 	if len(options.HeapSizeLimits) == 0 {
-		options.HeapSizeLimits = make([]int, len(physicalDevice.MemoryProperties().MemoryHeaps))
+		options.HeapSizeLimits = make([]int, len(driver.InstanceDriver().GetPhysicalDeviceMemoryProperties(physicalDevice).MemoryHeaps))
 	}
 
 	heapTypeCount := len(options.HeapSizeLimits)
@@ -133,13 +145,14 @@ func New(logger *slog.Logger, instance core1_0.Instance, physicalDevice core1_0.
 
 	var err error
 	allocator.deviceMemory, err = vulkan.NewDeviceMemoryProperties(
+		driver,
 		useMutex,
 		options.VulkanCallbacks,
 		&memoryCallbacks{
 			Callbacks: options.MemoryCallbackOptions,
 			Allocator: allocator,
 		},
-		device,
+		driver.Device(),
 		physicalDevice,
 		options.HeapSizeLimits,
 		externalMemoryTypes,

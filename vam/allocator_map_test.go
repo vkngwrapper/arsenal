@@ -6,19 +6,19 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/vkngwrapper/arsenal/memutils"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/core1_1"
-	"github.com/vkngwrapper/core/v2/core1_2"
-	"github.com/vkngwrapper/core/v2/mocks"
-	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/core/v3/core1_1"
+	"github.com/vkngwrapper/core/v3/core1_2"
+	"github.com/vkngwrapper/core/v3/mocks"
+	"github.com/vkngwrapper/extensions/v3/ext_memory_priority"
 	"go.uber.org/mock/gomock"
 )
 
 func TestAllocateAndMapNonCoherent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -55,8 +55,8 @@ func TestAllocateAndMapNonCoherent(t *testing.T) {
 	// Expect a block to be allocated, the default preferred size for a 1MB heap is
 	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
 	// resulting in 15628
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 15628)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  15628,
 		NextOptions: common.NextOptions{
@@ -74,22 +74,22 @@ func TestAllocateAndMapNonCoherent(t *testing.T) {
 	data := make([]byte, 15628)
 	dataPtr := unsafe.Pointer(&data[0])
 
-	memory.EXPECT().Map(0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
-	device.EXPECT().FlushMappedMemoryRanges([]core1_0.MappedMemoryRange{
+	driver.EXPECT().MapMemory(memory, 0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
+	driver.EXPECT().FlushMappedMemoryRanges([]core1_0.MappedMemoryRange{
 		{
 			Memory: memory,
 			Offset: 0,
 			Size:   500,
 		},
 	}).Return(core1_0.VKSuccess, nil)
-	device.EXPECT().InvalidateMappedMemoryRanges([]core1_0.MappedMemoryRange{
+	driver.EXPECT().InvalidateMappedMemoryRanges([]core1_0.MappedMemoryRange{
 		{
 			Memory: memory,
 			Offset: 500,
 			Size:   500,
 		},
 	}).Return(core1_0.VKSuccess, nil)
-	memory.EXPECT().Unmap()
+	driver.EXPECT().UnmapMemory(memory)
 
 	var allocation Allocation
 	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
@@ -123,7 +123,7 @@ func TestAllocateAndMapNonCoherent(t *testing.T) {
 func TestAllocateAndMapDedicatedNonCoherent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -160,8 +160,8 @@ func TestAllocateAndMapDedicatedNonCoherent(t *testing.T) {
 	// Expect a block to be allocated, the default preferred size for a 1MB heap is
 	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
 	// resulting in 15628
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 1000)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  1000,
 		NextOptions: common.NextOptions{
@@ -175,27 +175,27 @@ func TestAllocateAndMapDedicatedNonCoherent(t *testing.T) {
 			},
 		},
 	}).Return(memory, core1_0.VKSuccess, nil)
-	memory.EXPECT().Free(nil)
+	driver.EXPECT().FreeMemory(memory, nil)
 
 	data := make([]byte, 1000)
 	dataPtr := unsafe.Pointer(&data[0])
 
-	memory.EXPECT().Map(0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
-	device.EXPECT().FlushMappedMemoryRanges([]core1_0.MappedMemoryRange{
+	driver.EXPECT().MapMemory(memory, 0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
+	driver.EXPECT().FlushMappedMemoryRanges([]core1_0.MappedMemoryRange{
 		{
 			Memory: memory,
 			Offset: 0,
 			Size:   500,
 		},
 	}).Return(core1_0.VKSuccess, nil)
-	device.EXPECT().InvalidateMappedMemoryRanges([]core1_0.MappedMemoryRange{
+	driver.EXPECT().InvalidateMappedMemoryRanges([]core1_0.MappedMemoryRange{
 		{
 			Memory: memory,
 			Offset: 500,
 			Size:   500,
 		},
 	}).Return(core1_0.VKSuccess, nil)
-	memory.EXPECT().Unmap()
+	driver.EXPECT().UnmapMemory(memory)
 
 	var allocation Allocation
 	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
@@ -229,7 +229,7 @@ func TestAllocateAndMapDedicatedNonCoherent(t *testing.T) {
 func TestAllocateAndMap(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -266,8 +266,8 @@ func TestAllocateAndMap(t *testing.T) {
 	// Expect a block to be allocated, the default preferred size for a 1MB heap is
 	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
 	// resulting in 15628
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 15628)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  15628,
 		NextOptions: common.NextOptions{
@@ -297,8 +297,8 @@ func TestAllocateAndMap(t *testing.T) {
 		unmapCount = 2
 	}
 
-	memory.EXPECT().Map(0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil).Times(mapCount)
-	memory.EXPECT().Unmap().Times(unmapCount)
+	driver.EXPECT().MapMemory(memory, 0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil).Times(mapCount)
+	driver.EXPECT().UnmapMemory(memory).Times(unmapCount)
 
 	var allocation Allocation
 	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
@@ -334,7 +334,7 @@ func TestAllocateAndMap(t *testing.T) {
 func TestAllocatePersistentMap(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -371,8 +371,8 @@ func TestAllocatePersistentMap(t *testing.T) {
 	// Expect a block to be allocated, the default preferred size for a 1MB heap is
 	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
 	// resulting in 15628
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 15628)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  15628,
 		NextOptions: common.NextOptions{
@@ -390,13 +390,13 @@ func TestAllocatePersistentMap(t *testing.T) {
 	data := make([]byte, 15628)
 	dataPtr := unsafe.Pointer(&data[0])
 
-	memory.EXPECT().Map(0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
+	driver.EXPECT().MapMemory(memory, 0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
 
 	if memutils.DebugMargin == 0 {
 		// The extra map/unmap calls for writing the debug margins
 		// and reading them will force this into persistent map
 		// and prevent unmap
-		memory.EXPECT().Unmap()
+		driver.EXPECT().UnmapMemory(memory)
 	}
 
 	var allocation Allocation
@@ -433,7 +433,7 @@ func TestAllocatePersistentMap(t *testing.T) {
 func TestMapDedicatedMemory(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -467,8 +467,8 @@ func TestMapDedicatedMemory(t *testing.T) {
 		AllocatorOptions: CreateOptions{},
 	})
 
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 80000)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  80000,
 		NextOptions: common.NextOptions{
@@ -486,9 +486,9 @@ func TestMapDedicatedMemory(t *testing.T) {
 	data := make([]byte, 80000)
 	dataPtr := unsafe.Pointer(&data[0])
 
-	memory.EXPECT().Map(0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
-	memory.EXPECT().Unmap()
-	memory.EXPECT().Free(gomock.Any())
+	driver.EXPECT().MapMemory(memory, 0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
+	driver.EXPECT().UnmapMemory(memory)
+	driver.EXPECT().FreeMemory(memory, nil)
 
 	var allocation Allocation
 	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
@@ -517,7 +517,7 @@ func TestMapDedicatedMemory(t *testing.T) {
 func TestMapDedicatedMemoryPersistentMap(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -551,8 +551,8 @@ func TestMapDedicatedMemoryPersistentMap(t *testing.T) {
 		AllocatorOptions: CreateOptions{},
 	})
 
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 80000)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  80000,
 		NextOptions: common.NextOptions{
@@ -570,8 +570,8 @@ func TestMapDedicatedMemoryPersistentMap(t *testing.T) {
 	data := make([]byte, 80000)
 	dataPtr := unsafe.Pointer(&data[0])
 
-	memory.EXPECT().Map(0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
-	memory.EXPECT().Free(gomock.Any())
+	driver.EXPECT().MapMemory(memory, 0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
+	driver.EXPECT().FreeMemory(memory, nil)
 
 	var allocation Allocation
 	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
@@ -600,7 +600,7 @@ func TestMapDedicatedMemoryPersistentMap(t *testing.T) {
 func TestFlushMemorySlice(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -637,8 +637,8 @@ func TestFlushMemorySlice(t *testing.T) {
 	// Expect a block to be allocated, the default preferred size for a 1MB heap is
 	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
 	// resulting in 15628
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 15628)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  15628,
 		NextOptions: common.NextOptions{
@@ -655,9 +655,9 @@ func TestFlushMemorySlice(t *testing.T) {
 
 	data := make([]byte, 15628)
 	dataPtr := unsafe.Pointer(&data[0])
-	memory.EXPECT().Map(0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
+	driver.EXPECT().MapMemory(memory, 0, -1, core1_0.MemoryMapFlags(0)).Return(dataPtr, core1_0.VKSuccess, nil)
 
-	device.EXPECT().FlushMappedMemoryRanges([]core1_0.MappedMemoryRange{
+	driver.EXPECT().FlushMappedMemoryRanges([]core1_0.MappedMemoryRange{
 		{
 			Memory: memory,
 			Offset: 0,
@@ -710,7 +710,7 @@ func TestFlushMemorySlice(t *testing.T) {
 		},
 	})
 
-	device.EXPECT().InvalidateMappedMemoryRanges([]core1_0.MappedMemoryRange{
+	driver.EXPECT().InvalidateMappedMemoryRanges([]core1_0.MappedMemoryRange{
 		{
 			Memory: memory,
 			Offset: 500,

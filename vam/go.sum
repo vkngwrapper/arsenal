@@ -1,5 +1,3 @@
-github.com/CannibalVox/VKng v0.0.0-20220707035000-0931f864c378 h1:VT+Uklgvu+BMI2MLouYtTd/HL7uqE/ds3n9yeP8bj8I=
-github.com/CannibalVox/VKng v0.0.0-20220707035000-0931f864c378/go.mod h1:5+7U/5AcpGEUXyh1bz8L8XipbKPxmZr3gKxZou6nXlo=
 github.com/CannibalVox/cgoparam v1.1.0 h1:6UDDhOpT06csFE2vkcanXsIJmebMc9o+6Vzhvi4i0wY=
 github.com/CannibalVox/cgoparam v1.1.0/go.mod h1:9LDFLuHVgE+IIBDd1QFN3dPqmGQN9bS6H+NPizMv2fA=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
@@ -31,12 +29,14 @@ github.com/vkngwrapper/arsenal/memutils v1.1.2 h1:rKgNEleetRI4iG7pNhD21/Nw09VW4N
 github.com/vkngwrapper/arsenal/memutils v1.1.2/go.mod h1:1adWUUI6oj6xwOdlfp2B+C/9fNTuf8Ozaz1xp8CPwGk=
 github.com/vkngwrapper/core/v2 v2.2.3 h1:YqV+S+ywZ7HtBGGicIDIGprBId1KTFFvxoAQSFJYQLQ=
 github.com/vkngwrapper/core/v2 v2.2.3/go.mod h1:3F5gRWiRbbsEH3DPp67sezuP+4+m3fDEDYoWymd2N0I=
-github.com/vkngwrapper/extensions/v2 v2.2.1 h1:gWofZrduJj4maY2zVXo0kOuugTdXbuuEtf9Fmkt3tpU=
-github.com/vkngwrapper/extensions/v2 v2.2.1/go.mod h1:9LHOV8dQvJqQrWLGTuQ+JQ+2RvmkLV5zrq+Elt9qgRw=
+github.com/vkngwrapper/core/v3 v3.0.0 h1:kn9vbldQlF995lEyWwvaFzRQzXgHSzHOIEZhvKLLT50=
+github.com/vkngwrapper/core/v3 v3.0.0/go.mod h1:lIcOUaI3UePxmy+LW29EqmozCaVKF+r+pncbtx36qO4=
+github.com/vkngwrapper/extensions/v3 v3.0.2 h1:H/5anhdpZAZtHT6Ig5fsVL7ztK3ON7aAiqM/ZehgPfE=
+github.com/vkngwrapper/extensions/v3 v3.0.2/go.mod h1:OtgRxzFNXPBBUFDM3sX28WhcQWzXUgWtXmk/askQjiY=
 go.uber.org/mock v0.6.0 h1:hyF9dfmbgIX5EfOdasqLsWD6xqpNZlXblLB/Dbnwv3Y=
 go.uber.org/mock v0.6.0/go.mod h1:KiVJ4BqZJaMj4svdfmHM0AUx4NJYO8ZNpPnZn1Z+BBU=
-golang.org/x/image v0.0.0-20220722155232-062f8c9fd539 h1:/eM0PCrQI2xd471rI+snWuu251/+/jpBpZqir2mPdnU=
-golang.org/x/image v0.0.0-20220722155232-062f8c9fd539/go.mod h1:doUCurBvlfPMKfmIpRIywoHmhN3VyhnoFDbvIEWF4hY=
+golang.org/x/image v0.34.0 h1:33gCkyw9hmwbZJeZkct8XyR11yH889EQt/QH4VmXMn8=
+golang.org/x/image v0.34.0/go.mod h1:2RNFBZRB+vnwwFil8GkMdRvrJOFd1AzdZI6vOY+eJVU=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c h1:Hei/4ADfdWqJk1ZMxUNpqntNwaWcugrBjAiHlqqRiVk=
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c/go.mod h1:JHkPIbrfpd72SG/EVd6muEfDQjcINNoR0C8j2r3qZ4Q=

@@ -1,8 +1,9 @@
 package memutils
 
 import (
-	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"math"
+
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 )
 
 // Statistics is a type that represents metrics for the current state of a memory pool

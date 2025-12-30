@@ -9,8 +9,6 @@ import (
 	mock_defrag "github.com/vkngwrapper/arsenal/memutils/defrag/mocks"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	mock_metadata "github.com/vkngwrapper/arsenal/memutils/metadata/mocks"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
 	"go.uber.org/mock/gomock"
 )
 
@@ -377,9 +375,9 @@ func mockBlockMetadata(ctrl *gomock.Controller, list *mock_defrag.MockBlockList[
 		)
 		list.EXPECT().CreateAlloc().Return(&handle)
 		list.EXPECT().CommitDefragAllocationRequest(request, index, uint(0), uint32(0), gomock.Any(), uint32(0), gomock.Any()).DoAndReturn(
-			func(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *metadata.BlockAllocationHandle) (common.VkResult, error) {
+			func(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *metadata.BlockAllocationHandle) error {
 				*outAlloc = handle
-				return core1_0.VKSuccess, nil
+				return nil
 			},
 		)
 		blockMetadata.EXPECT().AllocationOffset(handle).AnyTimes().Return(move.ActualOffset, nil)

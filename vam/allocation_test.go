@@ -1,1 +1,0 @@
-package vam_test

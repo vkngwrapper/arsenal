@@ -11,9 +11,9 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/extensions/v2/khr_buffer_device_address"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/extensions/v3/khr_buffer_device_address"
 )
 
 // ErrAllocationAlreadyFreed is an error that is wrapped and returned when carrying out device-memory-accessing
@@ -282,7 +282,7 @@ func (a *Allocation) mapOptionalLock(useLock bool) (unsafe.Pointer, common.VkRes
 		return nil, core1_0.VKErrorUnknown, errors.Wrap(ErrAllocationAlreadyFreed, "failed to map memory")
 	}
 
-	ptr, res, err := a.memory.Map(1, 0, common.WholeSize, 0)
+	ptr, res, err := a.memory.Map(a.parentAllocator.driver, 1, 0, common.WholeSize, 0)
 	if err != nil || ptr == nil {
 		return ptr, res, err
 	}
@@ -299,7 +299,7 @@ func (a *Allocation) Unmap() error {
 	a.parentAllocator.logger.Debug("Allocation::Unmap")
 
 	a.mapLock.RUnlock()
-	return a.memory.Unmap(1)
+	return a.memory.Unmap(a.parentAllocator.driver, 1)
 }
 
 // Flush will flush the memory cache for a specified region of memory within this Allocation.
@@ -376,8 +376,8 @@ func (a *Allocation) BindBufferMemoryWithOffset(offset int, buffer core1_0.Buffe
 }
 
 func (a *Allocation) bindBufferMemory(offset int, buffer core1_0.Buffer, next common.Options) (common.VkResult, error) {
-	if buffer == nil {
-		return core1_0.VKErrorUnknown, errors.New("attempted to bind a nil buffer")
+	if !buffer.Initialized() {
+		return core1_0.VKErrorUnknown, errors.New("attempted to bind an uninitialized buffer")
 	}
 	a.mapLock.RLock()
 	defer a.mapLock.RUnlock()
@@ -388,10 +388,10 @@ func (a *Allocation) bindBufferMemory(offset int, buffer core1_0.Buffer, next co
 
 	switch a.allocationType {
 	case allocationTypeDedicated:
-		return a.memory.BindVulkanBuffer(offset, buffer, next)
+		return a.memory.BindVulkanBuffer(a.parentAllocator.driver, offset, buffer, next)
 	case allocationTypeBlock:
 		allocOffset := a.FindOffset()
-		return a.memory.BindVulkanBuffer(offset+allocOffset, buffer, next)
+		return a.memory.BindVulkanBuffer(a.parentAllocator.driver, offset+allocOffset, buffer, next)
 	}
 
 	return core1_0.VKErrorUnknown, errors.Errorf("attempted to bind an allocation with an unknown type: %s", a.allocationType.String())
@@ -433,8 +433,8 @@ func (a *Allocation) BindImageMemoryWithOffset(offset int, image core1_0.Image, 
 }
 
 func (a *Allocation) bindImageMemory(offset int, image core1_0.Image, next common.Options) (common.VkResult, error) {
-	if image == nil {
-		return core1_0.VKErrorUnknown, errors.New("attempted to bind a nil image")
+	if !image.Initialized() {
+		return core1_0.VKErrorUnknown, errors.New("attempted to bind an uninitialized image")
 	}
 
 	a.mapLock.RLock()
@@ -446,10 +446,10 @@ func (a *Allocation) bindImageMemory(offset int, image core1_0.Image, next commo
 
 	switch a.allocationType {
 	case allocationTypeDedicated:
-		return a.memory.BindVulkanImage(offset, image, next)
+		return a.memory.BindVulkanImage(a.parentAllocator.driver, offset, image, next)
 	case allocationTypeBlock:
 		allocOffset := a.FindOffset()
-		return a.memory.BindVulkanImage(offset+allocOffset, image, next)
+		return a.memory.BindVulkanImage(a.parentAllocator.driver, offset+allocOffset, image, next)
 	}
 
 	return core1_0.VKErrorUnknown, errors.Errorf("attempted to bind an allocation with an unknown type: %s", a.allocationType.String())
@@ -546,7 +546,7 @@ func (a *Allocation) flushOrInvalidate(offset, size int, operation vulkan.CacheO
 		return core1_0.VKSuccess, nil
 	}
 
-	return a.parentAllocator.deviceMemory.FlushOrInvalidateAllocations([]core1_0.MappedMemoryRange{memRange}, operation)
+	return a.parentAllocator.deviceMemory.FlushOrInvalidateAllocations(a.parentAllocator.driver, []core1_0.MappedMemoryRange{memRange}, operation)
 }
 
 func (a *Allocation) nextDedicatedAlloc() *Allocation {
@@ -654,8 +654,8 @@ func (a *Allocation) swapBlockAllocation(alloc *Allocation) error {
 func (a *Allocation) DestroyImage(image core1_0.Image) error {
 	a.parentAllocator.logger.Debug("Allocation::DestroyImage")
 
-	if image != nil {
-		image.Destroy(a.parentAllocator.allocationCallbacks)
+	if image.Initialized() {
+		a.parentAllocator.driver.DestroyImage(image, a.parentAllocator.allocationCallbacks)
 	}
 
 	return a.free()
@@ -667,8 +667,8 @@ func (a *Allocation) DestroyImage(image core1_0.Image) error {
 func (a *Allocation) DestroyBuffer(buffer core1_0.Buffer) error {
 	a.parentAllocator.logger.Debug("Allocation::DestroyBuffer")
 
-	if buffer != nil {
-		buffer.Destroy(a.parentAllocator.allocationCallbacks)
+	if buffer.Initialized() {
+		a.parentAllocator.driver.DestroyBuffer(buffer, a.parentAllocator.allocationCallbacks)
 	}
 
 	return a.free()
@@ -726,22 +726,22 @@ func (a *Allocation) createAliasingBuffer(offset int, bufferInfo *core1_0.Buffer
 	defer a.mapLock.RUnlock()
 
 	if bufferInfo.Size == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create a buffer of 0 size")
+		return core1_0.Buffer{}, core1_0.VKErrorUnknown, errors.New("attempted to create a buffer of 0 size")
 	} else if offset+bufferInfo.Size > a.Size() {
-		return nil, core1_0.VKErrorUnknown, errors.Errorf("attempted to create a buffer that was too big to fit in its allocation: offset %d, size %d, buffer would have ended at %d but allocation is only %d bytes", offset, bufferInfo.Size, offset+bufferInfo.Size, a.Size())
+		return core1_0.Buffer{}, core1_0.VKErrorUnknown, errors.Errorf("attempted to create a buffer that was too big to fit in its allocation: offset %d, size %d, buffer would have ended at %d but allocation is only %d bytes", offset, bufferInfo.Size, offset+bufferInfo.Size, a.Size())
 	} else if bufferInfo.Usage&khr_buffer_device_address.BufferUsageShaderDeviceAddress != 0 && a.parentAllocator.extensionData.BufferDeviceAddress == nil {
-		return nil, core1_0.VKErrorExtensionNotPresent, errors.New("attempted to use BufferUsageShaderDeviceAddress, but khr_buffer_device_address is not loaded")
+		return core1_0.Buffer{}, core1_0.VKErrorExtensionNotPresent, errors.New("attempted to use BufferUsageShaderDeviceAddress, but khr_buffer_device_address is not loaded")
 	} else if a.memory == nil {
-		return nil, core1_0.VKErrorUnknown, errors.Wrap(ErrAllocationAlreadyFreed, "failed to create aliasing buffer")
+		return core1_0.Buffer{}, core1_0.VKErrorUnknown, errors.Wrap(ErrAllocationAlreadyFreed, "failed to create aliasing buffer")
 	}
 
-	buffer, res, err = a.parentAllocator.device.CreateBuffer(a.parentAllocator.allocationCallbacks, *bufferInfo)
+	buffer, res, err = a.parentAllocator.driver.CreateBuffer(a.parentAllocator.allocationCallbacks, *bufferInfo)
 	if err != nil {
 		return buffer, res, err
 	}
 	defer func() {
 		if err != nil {
-			buffer.Destroy(a.parentAllocator.allocationCallbacks)
+			a.parentAllocator.driver.DestroyBuffer(buffer, a.parentAllocator.allocationCallbacks)
 		}
 	}()
 
@@ -799,24 +799,24 @@ func (a *Allocation) createAliasingImage(offset int, imageInfo *core1_0.ImageCre
 	defer a.mapLock.RUnlock()
 
 	if imageInfo.Extent.Width == 0 || imageInfo.Extent.Height == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create 0-sized image")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to create 0-sized image")
 	} else if imageInfo.Extent.Depth == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create 0-depth image")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to create 0-depth image")
 	} else if imageInfo.MipLevels == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 mip levels")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 mip levels")
 	} else if imageInfo.ArrayLayers == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 array layers")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 array layers")
 	} else if a.memory == nil {
-		return nil, core1_0.VKErrorUnknown, errors.Wrap(ErrAllocationAlreadyFreed, "failed to create aliasing buffer")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.Wrap(ErrAllocationAlreadyFreed, "failed to create aliasing buffer")
 	}
 
-	image, res, err = a.parentAllocator.device.CreateImage(a.parentAllocator.allocationCallbacks, *imageInfo)
+	image, res, err = a.parentAllocator.driver.CreateImage(a.parentAllocator.allocationCallbacks, *imageInfo)
 	if err != nil {
 		return image, res, err
 	}
 	defer func() {
 		if err != nil {
-			image.Destroy(a.parentAllocator.allocationCallbacks)
+			a.parentAllocator.driver.DestroyImage(image, a.parentAllocator.allocationCallbacks)
 		}
 	}()
 

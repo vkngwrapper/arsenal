@@ -6,10 +6,10 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/core1_1"
-	"github.com/vkngwrapper/core/v2/driver"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/core/v3/core1_1"
+	"github.com/vkngwrapper/core/v3/loader"
 )
 
 type SynchronizedMemory struct {
@@ -27,11 +27,11 @@ type SynchronizedMemory struct {
 	memory        core1_0.DeviceMemory
 	extensionData atomic.Pointer[ExtensionData]
 
-	allocationCallbacks *driver.AllocationCallbacks
+	allocationCallbacks *loader.AllocationCallbacks
 }
 
-func allocateSynchronizedMemory(device core1_0.Device, useMutex bool, callbacks *driver.AllocationCallbacks, extensionData *ExtensionData, allocateInfo core1_0.MemoryAllocateInfo) (*SynchronizedMemory, common.VkResult, error) {
-	memory, res, err := device.AllocateMemory(callbacks, allocateInfo)
+func allocateSynchronizedMemory(driver core1_0.DeviceDriver, useMutex bool, callbacks *loader.AllocationCallbacks, extensionData *ExtensionData, allocateInfo core1_0.MemoryAllocateInfo) (*SynchronizedMemory, common.VkResult, error) {
+	memory, res, err := driver.AllocateMemory(callbacks, allocateInfo)
 	if err != nil {
 		return nil, res, err
 	}
@@ -52,7 +52,7 @@ func (m *SynchronizedMemory) VulkanDeviceMemory() core1_0.DeviceMemory {
 	return m.memory
 }
 
-func (m *SynchronizedMemory) BindVulkanBuffer(offset int, buffer core1_0.Buffer, next common.Options) (common.VkResult, error) {
+func (m *SynchronizedMemory) BindVulkanBuffer(driver core1_0.DeviceDriver, offset int, buffer core1_0.Buffer, next common.Options) (common.VkResult, error) {
 	if next != nil && m.extensionData.Load().BindMemory2 == nil {
 		// We included a next pointer for BindBufferMemory2 but it isn't active
 		return core1_0.VKErrorExtensionNotPresent, core1_0.VKErrorExtensionNotPresent.ToError()
@@ -62,20 +62,19 @@ func (m *SynchronizedMemory) BindVulkanBuffer(offset int, buffer core1_0.Buffer,
 	defer m.mapMutex.Unlock()
 
 	if next != nil {
-		return m.extensionData.Load().BindMemory2.BindBufferMemory2([]core1_1.BindBufferMemoryInfo{
-			{
+		return m.extensionData.Load().BindMemory2.BindBufferMemory2(
+			core1_1.BindBufferMemoryInfo{
 				Buffer:       buffer,
 				Memory:       m.memory,
 				MemoryOffset: offset,
 				NextOptions:  common.NextOptions{Next: next},
-			},
-		})
+			})
 	}
 
-	return buffer.BindBufferMemory(m.memory, offset)
+	return driver.BindBufferMemory(buffer, m.memory, offset)
 }
 
-func (m *SynchronizedMemory) BindVulkanImage(offset int, image core1_0.Image, next common.Options) (common.VkResult, error) {
+func (m *SynchronizedMemory) BindVulkanImage(driver core1_0.DeviceDriver, offset int, image core1_0.Image, next common.Options) (common.VkResult, error) {
 	if next != nil && m.extensionData.Load().BindMemory2 == nil {
 		// We included a next pointer for BindBufferMemory2 but it isn't active
 		return core1_0.VKErrorExtensionNotPresent, core1_0.VKErrorExtensionNotPresent.ToError()
@@ -85,17 +84,16 @@ func (m *SynchronizedMemory) BindVulkanImage(offset int, image core1_0.Image, ne
 	defer m.mapMutex.Unlock()
 
 	if next != nil {
-		return m.extensionData.Load().BindMemory2.BindImageMemory2([]core1_1.BindImageMemoryInfo{
-			{
+		return m.extensionData.Load().BindMemory2.BindImageMemory2(
+			core1_1.BindImageMemoryInfo{
 				Image:        image,
 				MemoryOffset: uint64(offset),
 				Memory:       m.memory,
 				NextOptions:  common.NextOptions{Next: next},
-			},
-		})
+			})
 	}
 
-	return image.BindImageMemory(m.memory, offset)
+	return driver.BindImageMemory(image, m.memory, offset)
 }
 func (m *SynchronizedMemory) References() int {
 	refs := m.mapReferences
@@ -146,7 +144,7 @@ func (m *SynchronizedMemory) RecordSuballocSubfree() bool {
 	return false
 }
 
-func (m *SynchronizedMemory) Map(references int, offset int, size int, flags core1_0.MemoryMapFlags) (unsafe.Pointer, common.VkResult, error) {
+func (m *SynchronizedMemory) Map(driver core1_0.DeviceDriver, references int, offset int, size int, flags core1_0.MemoryMapFlags) (unsafe.Pointer, common.VkResult, error) {
 	if references == 0 {
 		return nil, core1_0.VKSuccess, nil
 	}
@@ -166,7 +164,7 @@ func (m *SynchronizedMemory) Map(references int, offset int, size int, flags cor
 		return m.mapData, core1_0.VKSuccess, nil
 	}
 
-	mappedData, result, err := m.memory.Map(offset, size, flags)
+	mappedData, result, err := driver.MapMemory(m.memory, offset, size, flags)
 	if err != nil {
 		return nil, result, err
 	}
@@ -176,7 +174,7 @@ func (m *SynchronizedMemory) Map(references int, offset int, size int, flags cor
 	return mappedData, result, nil
 }
 
-func (m *SynchronizedMemory) Unmap(references int) error {
+func (m *SynchronizedMemory) Unmap(driver core1_0.DeviceDriver, references int) error {
 	if m.mapReferences == 0 {
 		return nil
 	}
@@ -195,16 +193,16 @@ func (m *SynchronizedMemory) Unmap(references int) error {
 	m.postMapUnmap()
 
 	if m.References() <= 0 {
-		m.memory.Unmap()
+		driver.UnmapMemory(m.memory)
 		m.mapData = nil
 	}
 
 	return nil
 }
 
-func (m *SynchronizedMemory) FreeMemory() {
+func (m *SynchronizedMemory) FreeMemory(driver core1_0.DeviceDriver) {
 	m.mapMutex.Lock()
 	defer m.mapMutex.Unlock()
 
-	m.memory.Free(m.allocationCallbacks)
+	driver.FreeMemory(m.memory, m.allocationCallbacks)
 }

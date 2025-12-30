@@ -7,7 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
-	"github.com/vkngwrapper/core/v2/common"
+	"github.com/vkngwrapper/core/v3/common"
 )
 
 // DefragmentationFlags is a set of bitflags that specify behavior for the DefragmentationContext

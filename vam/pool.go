@@ -5,7 +5,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
-	"github.com/vkngwrapper/core/v2/common"
+	"github.com/vkngwrapper/core/v3/common"
 )
 
 // PoolCreateInfo is an options structure that is used to specify the behavior for a new

@@ -3,7 +3,6 @@ package defrag
 import (
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
-	"github.com/vkngwrapper/core/v2/common"
 )
 
 //go:generate mockgen -source block_list.go -destination ./mocks/block_list.go
@@ -60,7 +59,7 @@ type BlockList[T any] interface {
 	// subAllocType - The type used for the new allocation
 	//
 	// outAlloc - An allocation object of the type used internally to the BlockList, to which the allocation will be assigned
-	CommitDefragAllocationRequest(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *T) (common.VkResult, error)
+	CommitDefragAllocationRequest(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *T) error
 	// SwapBlocks rearranges memory pages within the BlockList's internal slice. The defragmentation code will handle calling Lock / Unlock
 	// so it is not necessary for this method to be thread safe.
 	SwapBlocks(leftIndex, rightIndex int)

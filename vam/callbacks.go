@@ -1,6 +1,6 @@
 package vam
 
-import "github.com/vkngwrapper/core/v2/core1_0"
+import "github.com/vkngwrapper/core/v3/core1_0"
 
 // AllocateDeviceMemoryCallback is a callback that fires when new device memory is allocated from Vulkan.
 // It does not fire with every new Allocation object, since device memory is frequently reused for block

@@ -18,12 +18,12 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/core1_1"
-	"github.com/vkngwrapper/core/v2/core1_2"
-	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
-	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/core/v3/core1_1"
+	"github.com/vkngwrapper/core/v3/core1_2"
+	"github.com/vkngwrapper/extensions/v3/ext_memory_priority"
+	"github.com/vkngwrapper/extensions/v3/khr_external_memory"
 )
 
 var blockPool = sync.Pool{
@@ -189,7 +189,7 @@ func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, erro
 	}
 
 	// Allocate
-	memory, res, err := l.deviceMemory.AllocateVulkanMemory(allocInfo)
+	memory, res, err := l.deviceMemory.AllocateVulkanMemory(l.parentAllocator.driver, allocInfo)
 	if err != nil {
 		return -1, res, err
 	}
@@ -197,7 +197,7 @@ func (l *memoryBlockList) CreateBlock(blockSize int) (int, common.VkResult, erro
 	// Build allocation
 	block := blockPool.Get().(*deviceMemoryBlock)
 
-	block.Init(l.logger, l.parentPool, l.deviceMemory, l.memoryTypeIndex, memory, allocInfo.AllocationSize, l.nextBlockId, l.algorithm, l.bufferImageGranularity)
+	block.Init(l.logger, l.parentAllocator.driver, l.parentPool, l.deviceMemory, l.memoryTypeIndex, memory, allocInfo.AllocationSize, l.nextBlockId, l.algorithm, l.bufferImageGranularity)
 	l.nextBlockId++
 
 	l.blocks = append(l.blocks, block)
@@ -488,7 +488,7 @@ func (l *memoryBlockList) freeWithLock(alloc *Allocation, heapIndex int) (blockT
 
 	if alloc.isPersistentMap() {
 		// Unmap might fail if the user has screwed up Map/Unmap pairs, we want to return error in that case
-		err := block.memory.Unmap(1)
+		err := block.memory.Unmap(l.parentAllocator.driver, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -607,7 +607,7 @@ func (l *memoryBlockList) commitAllocationRequest(allocRequest metadata.Allocati
 
 	// Allocate from block
 	if mapped {
-		_, res, err := block.memory.Map(1, 0, -1, 0)
+		_, res, err := block.memory.Map(l.parentAllocator.driver, 1, 0, -1, 0)
 		if err != nil {
 			return res, err
 		}
@@ -731,8 +731,8 @@ func (l *memoryBlockList) Unlock() {
 	l.mutex.Unlock()
 }
 
-func (l *memoryBlockList) CommitDefragAllocationRequest(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *Allocation) (common.VkResult, error) {
-	return l.commitAllocationRequest(
+func (l *memoryBlockList) CommitDefragAllocationRequest(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *Allocation) error {
+	_, err := l.commitAllocationRequest(
 		allocRequest,
 		l.blocks[blockIndex],
 		alignment,
@@ -741,6 +741,7 @@ func (l *memoryBlockList) CommitDefragAllocationRequest(allocRequest metadata.Al
 		suballocationType(suballocType),
 		outAlloc,
 	)
+	return err
 }
 
 func (l *memoryBlockList) CreateAlloc() *Allocation {

@@ -10,8 +10,8 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
 )
 
 type deviceMemoryBlock struct {
@@ -21,6 +21,7 @@ type deviceMemoryBlock struct {
 	memoryTypeIndex int
 	logger          *slog.Logger
 
+	driver             core1_0.CoreDeviceDriver
 	metadata           metadata.BlockMetadata
 	deviceMemory       *vulkan.DeviceMemoryProperties
 	granularityHandler blockBufferImageGranularity
@@ -28,6 +29,7 @@ type deviceMemoryBlock struct {
 
 func (b *deviceMemoryBlock) Init(
 	logger *slog.Logger,
+	driver core1_0.CoreDeviceDriver,
 	pool *Pool,
 	deviceMemory *vulkan.DeviceMemoryProperties,
 	newMemoryTypeIndex int,
@@ -41,6 +43,7 @@ func (b *deviceMemoryBlock) Init(
 		panic("attempting to initialize a device memory block that is already in use")
 	}
 
+	b.driver = driver
 	b.parentPool = pool
 	b.memoryTypeIndex = newMemoryTypeIndex
 	b.id = id
@@ -87,7 +90,7 @@ func (b *deviceMemoryBlock) Destroy() error {
 		panic("attempting to destroy a memory block, but it did not have a backing vulkan memory handle")
 	}
 
-	b.deviceMemory.FreeVulkanMemory(b.memoryTypeIndex, b.metadata.Size(), b.memory)
+	b.deviceMemory.FreeVulkanMemory(b.driver, b.memoryTypeIndex, b.metadata.Size(), b.memory)
 
 	b.memory = nil
 	b.metadata = nil
@@ -137,12 +140,12 @@ func (b *deviceMemoryBlock) Validate() error {
 }
 
 func (b *deviceMemoryBlock) CheckCorruption() (res common.VkResult, err error) {
-	data, res, err := b.memory.Map(1, 0, common.WholeSize, 0)
+	data, res, err := b.memory.Map(b.driver, 1, 0, common.WholeSize, 0)
 	if err != nil {
 		return res, err
 	}
 	defer func() {
-		unmapErr := b.memory.Unmap(1)
+		unmapErr := b.memory.Unmap(b.driver, 1)
 		if err == nil && unmapErr != nil {
 			err = unmapErr
 			res = core1_0.VKErrorUnknown
@@ -164,12 +167,12 @@ func (b *deviceMemoryBlock) WriteMagicBlockAfterAllocation(allocOffset int, allo
 		panic(fmt.Sprintf("invalid debug margin: debug margin %d must be a multiple of 4", memutils.DebugMargin))
 	}
 
-	data, res, err := b.memory.Map(1, 0, common.WholeSize, 0)
+	data, res, err := b.memory.Map(b.driver, 1, 0, common.WholeSize, 0)
 	if err != nil {
 		return res, err
 	}
 	defer func() {
-		unmapErr := b.memory.Unmap(1)
+		unmapErr := b.memory.Unmap(b.driver, 1)
 		if err == nil && unmapErr != nil {
 			err = unmapErr
 			res = core1_0.VKErrorUnknown
@@ -188,12 +191,12 @@ func (b *deviceMemoryBlock) ValidateMagicValueAfterAllocation(allocOffset int, a
 		panic(fmt.Sprintf("invalid debug margin: debug margin %d must be a multiple of 4", memutils.DebugMargin))
 	}
 
-	data, res, err := b.memory.Map(1, 0, common.WholeSize, 0)
+	data, res, err := b.memory.Map(b.driver, 1, 0, common.WholeSize, 0)
 	if err != nil {
 		return res, err
 	}
 	defer func() {
-		err = b.memory.Unmap(1)
+		err = b.memory.Unmap(b.driver, 1)
 		if err != nil {
 			res = core1_0.VKErrorUnknown
 		}

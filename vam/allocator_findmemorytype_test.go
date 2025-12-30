@@ -4,12 +4,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/core1_1"
-	"github.com/vkngwrapper/core/v2/mocks"
-	"github.com/vkngwrapper/extensions/v2/khr_maintenance4"
-	mock_maintenance4 "github.com/vkngwrapper/extensions/v2/khr_maintenance4/mocks"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/core/v3/core1_1"
+	"github.com/vkngwrapper/core/v3/mocks"
+	"github.com/vkngwrapper/extensions/v3/khr_maintenance4"
+	"github.com/vkngwrapper/extensions/v3/khr_maintenance4/mocks"
 	"go.uber.org/mock/gomock"
 )
 
@@ -114,15 +114,12 @@ func TestFindMemoryTypeIndexForImageInfo(t *testing.T) {
 			ctrl := gomock.NewController(t)
 
 			setup.DeviceProperties.DriverType = testCase.DriverType
-			if testCase.Maint4Extension {
-				setup.DeviceExtensions = []string{khr_maintenance4.ExtensionName}
-			}
 
-			_, _, _, device, allocator := readyAllocator(t, ctrl, setup)
+			driver, _, allocator := readyAllocator(t, ctrl, setup)
 			if allocator.extensionData.Maintenance4 != nil {
-				maint4 := mock_maintenance4.NewMockExtension(ctrl)
+				maint4 := mock_maintenance4.NewMockExtensionDriver(ctrl)
 				allocator.extensionData.Maintenance4 = maint4
-				maint4.EXPECT().DeviceImageMemoryRequirements(device, khr_maintenance4.DeviceImageMemoryRequirements{
+				maint4.EXPECT().GetDeviceImageMemoryRequirements(khr_maintenance4.DeviceImageMemoryRequirements{
 					CreateInfo: testCase.ImageCreateInfo,
 				}, gomock.Any()).DoAndReturn(func(device core1_0.Device, options khr_maintenance4.DeviceImageMemoryRequirements, outData *core1_1.MemoryRequirements2) error {
 					outData.MemoryRequirements = core1_0.MemoryRequirements{
@@ -133,15 +130,15 @@ func TestFindMemoryTypeIndexForImageInfo(t *testing.T) {
 					return nil
 				})
 			} else {
-				image := mocks.EasyMockImage(ctrl)
-				image.EXPECT().MemoryRequirements().Return(&core1_0.MemoryRequirements{
+				image := mocks.NewDummyImage(driver.Device())
+				driver.EXPECT().GetImageMemoryRequirements(image).Return(&core1_0.MemoryRequirements{
 					Size:           1000,
 					Alignment:      1,
 					MemoryTypeBits: 0xffffffff,
 				})
-				image.EXPECT().Destroy(gomock.Any())
+				driver.EXPECT().DestroyImage(image, nil)
 
-				device.EXPECT().CreateImage(gomock.Any(), testCase.ImageCreateInfo).Return(image, core1_0.VKSuccess, nil)
+				driver.EXPECT().CreateImage(gomock.Any(), testCase.ImageCreateInfo).Return(image, core1_0.VKSuccess, nil)
 			}
 
 			index, res, _ := allocator.FindMemoryTypeIndexForImageInfo(testCase.ImageCreateInfo, testCase.Alloc)
@@ -369,15 +366,12 @@ func TestFindMemoryTypeIndexForBufferInfo(t *testing.T) {
 			}
 
 			setup.DeviceProperties.DriverType = testCase.DriverType
-			if testCase.Maint4Extension {
-				setup.DeviceExtensions = []string{khr_maintenance4.ExtensionName}
-			}
 
-			_, _, _, device, allocator := readyAllocator(t, ctrl, setup)
+			driver, _, allocator := readyAllocator(t, ctrl, setup)
 			if allocator.extensionData.Maintenance4 != nil {
-				maint4 := mock_maintenance4.NewMockExtension(ctrl)
+				maint4 := mock_maintenance4.NewMockExtensionDriver(ctrl)
 				allocator.extensionData.Maintenance4 = maint4
-				maint4.EXPECT().DeviceBufferMemoryRequirements(device, khr_maintenance4.DeviceBufferMemoryRequirements{
+				maint4.EXPECT().GetDeviceBufferMemoryRequirements(khr_maintenance4.DeviceBufferMemoryRequirements{
 					CreateInfo: testCase.BufferCreateInfo,
 				}, gomock.Any()).DoAndReturn(func(device core1_0.Device, options khr_maintenance4.DeviceBufferMemoryRequirements, outData *core1_1.MemoryRequirements2) error {
 					outData.MemoryRequirements = core1_0.MemoryRequirements{
@@ -388,15 +382,15 @@ func TestFindMemoryTypeIndexForBufferInfo(t *testing.T) {
 					return nil
 				})
 			} else {
-				buffer := mocks.EasyMockBuffer(ctrl)
-				buffer.EXPECT().MemoryRequirements().Return(&core1_0.MemoryRequirements{
+				buffer := mocks.NewDummyBuffer(driver.Device())
+				driver.EXPECT().GetBufferMemoryRequirements(buffer).Return(&core1_0.MemoryRequirements{
 					Size:           1000,
 					Alignment:      1,
 					MemoryTypeBits: 0xffffffff,
 				})
-				buffer.EXPECT().Destroy(gomock.Any())
+				driver.EXPECT().DestroyBuffer(buffer, gomock.Any())
 
-				device.EXPECT().CreateBuffer(gomock.Any(), testCase.BufferCreateInfo).Return(buffer, core1_0.VKSuccess, nil)
+				driver.EXPECT().CreateBuffer(gomock.Any(), testCase.BufferCreateInfo).Return(buffer, core1_0.VKSuccess, nil)
 			}
 
 			index, res, _ := allocator.FindMemoryTypeIndexForBufferInfo(testCase.BufferCreateInfo, testCase.Alloc)

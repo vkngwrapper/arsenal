@@ -6,19 +6,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/core1_1"
-	"github.com/vkngwrapper/core/v2/core1_2"
-	"github.com/vkngwrapper/core/v2/mocks"
-	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/core/v3/core1_1"
+	"github.com/vkngwrapper/core/v3/core1_2"
+	"github.com/vkngwrapper/core/v3/mocks"
+	"github.com/vkngwrapper/extensions/v3/ext_memory_priority"
 	"go.uber.org/mock/gomock"
 )
 
 func TestAllocateDefrag(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -55,8 +55,8 @@ func TestAllocateDefrag(t *testing.T) {
 	// Expect a block to be allocated, the default preferred size for a 1MB heap is
 	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
 	// resulting in 15628
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 15628)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  15628,
 		NextOptions: common.NextOptions{

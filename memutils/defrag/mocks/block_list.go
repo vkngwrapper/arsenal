@@ -15,7 +15,6 @@ import (
 	memutils "github.com/vkngwrapper/arsenal/memutils"
 	defrag "github.com/vkngwrapper/arsenal/memutils/defrag"
 	metadata "github.com/vkngwrapper/arsenal/memutils/metadata"
-	common "github.com/vkngwrapper/core/v2/common"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -84,12 +83,11 @@ func (mr *MockBlockListMockRecorder[T]) BufferImageGranularity() *gomock.Call {
 }
 
 // CommitDefragAllocationRequest mocks base method.
-func (m *MockBlockList[T]) CommitDefragAllocationRequest(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *T) (common.VkResult, error) {
+func (m *MockBlockList[T]) CommitDefragAllocationRequest(allocRequest metadata.AllocationRequest, blockIndex int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *T) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CommitDefragAllocationRequest", allocRequest, blockIndex, alignment, flags, userData, suballocType, outAlloc)
-	ret0, _ := ret[0].(common.VkResult)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 // CommitDefragAllocationRequest indicates an expected call of CommitDefragAllocationRequest.

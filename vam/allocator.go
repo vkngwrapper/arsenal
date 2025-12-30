@@ -15,16 +15,16 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
 	"github.com/vkngwrapper/arsenal/vam/internal/vulkan"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/core1_1"
-	"github.com/vkngwrapper/core/v2/driver"
-	"github.com/vkngwrapper/extensions/v2/amd_device_coherent_memory"
-	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
-	"github.com/vkngwrapper/extensions/v2/khr_buffer_device_address"
-	"github.com/vkngwrapper/extensions/v2/khr_dedicated_allocation"
-	"github.com/vkngwrapper/extensions/v2/khr_external_memory"
-	"github.com/vkngwrapper/extensions/v2/khr_maintenance4"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/core/v3/core1_1"
+	"github.com/vkngwrapper/core/v3/loader"
+	"github.com/vkngwrapper/extensions/v3/amd_device_coherent_memory"
+	"github.com/vkngwrapper/extensions/v3/ext_memory_priority"
+	"github.com/vkngwrapper/extensions/v3/khr_buffer_device_address"
+	"github.com/vkngwrapper/extensions/v3/khr_dedicated_allocation"
+	"github.com/vkngwrapper/extensions/v3/khr_external_memory"
+	"github.com/vkngwrapper/extensions/v3/khr_maintenance4"
 )
 
 const (
@@ -39,9 +39,10 @@ type Allocator struct {
 	instance            core1_0.Instance
 	physicalDevice      core1_0.PhysicalDevice
 	device              core1_0.Device
-	allocationCallbacks *driver.AllocationCallbacks
+	allocationCallbacks *loader.AllocationCallbacks
 
 	createFlags   CreateFlags
+	driver        core1_0.CoreDeviceDriver
 	extensionData *vulkan.ExtensionData
 
 	preferredLargeHeapBlockSize      int
@@ -233,8 +234,7 @@ func (a *Allocator) FindMemoryTypeIndexForBufferInfo(
 	if a.extensionData.Maintenance4 != nil {
 		// khr_maintenance4 (promoted to 1.3) lets us query memory requirements with BufferCreateInfo directly
 		var memoryReqs core1_1.MemoryRequirements2
-		err := a.extensionData.Maintenance4.DeviceBufferMemoryRequirements(
-			a.device,
+		err := a.extensionData.Maintenance4.GetDeviceBufferMemoryRequirements(
 			khr_maintenance4.DeviceBufferMemoryRequirements{
 				CreateInfo: bufferInfo,
 			}, &memoryReqs)
@@ -276,8 +276,7 @@ func (a *Allocator) FindMemoryTypeIndexForImageInfo(
 	if a.extensionData.Maintenance4 != nil {
 		// khr_maintenance4 (promoted to 1.3) lets us query memory requirements with ImageCreateInfo directly
 		var memoryReqs core1_1.MemoryRequirements2
-		err := a.extensionData.Maintenance4.DeviceImageMemoryRequirements(
-			a.device,
+		err := a.extensionData.Maintenance4.GetDeviceImageMemoryRequirements(
 			khr_maintenance4.DeviceImageMemoryRequirements{
 				CreateInfo: imageInfo,
 			}, &memoryReqs)
@@ -303,25 +302,25 @@ func (a *Allocator) FindMemoryTypeIndexForImageInfo(
 func (a *Allocator) getMemoryRequirementsForImageInfo(
 	imageInfo core1_0.ImageCreateInfo,
 ) (*core1_0.MemoryRequirements, common.VkResult, error) {
-	image, res, err := a.device.CreateImage(a.allocationCallbacks, imageInfo)
+	image, res, err := a.driver.CreateImage(a.allocationCallbacks, imageInfo)
 	if err != nil {
 		return nil, res, err
 	}
-	defer image.Destroy(a.allocationCallbacks)
+	defer a.driver.DestroyImage(image, a.allocationCallbacks)
 
-	return image.MemoryRequirements(), core1_0.VKSuccess, nil
+	return a.driver.GetImageMemoryRequirements(image), core1_0.VKSuccess, nil
 }
 
 func (a *Allocator) getMemoryRequirementsFromBufferInfo(
 	bufferInfo core1_0.BufferCreateInfo,
 ) (*core1_0.MemoryRequirements, common.VkResult, error) {
-	buffer, res, err := a.device.CreateBuffer(a.allocationCallbacks, bufferInfo)
+	buffer, res, err := a.driver.CreateBuffer(a.allocationCallbacks, bufferInfo)
 	if err != nil {
 		return nil, res, err
 	}
-	defer buffer.Destroy(a.allocationCallbacks)
+	defer a.driver.DestroyBuffer(buffer, a.allocationCallbacks)
 
-	return buffer.MemoryRequirements(), core1_0.VKSuccess, nil
+	return a.driver.GetBufferMemoryRequirements(buffer), core1_0.VKSuccess, nil
 }
 
 func (a *Allocator) findMemoryTypeIndex(
@@ -407,7 +406,7 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 	userData any,
 	alloc *Allocation,
 ) (res common.VkResult, err error) {
-	mem, res, err := a.deviceMemory.AllocateVulkanMemory(allocInfo)
+	mem, res, err := a.deviceMemory.AllocateVulkanMemory(a.driver, allocInfo)
 	if err != nil {
 		a.logger.Debug("    Allocator::allocateDedicatedMemoryPage FAILED")
 		return res, err
@@ -415,13 +414,13 @@ func (a *Allocator) allocateDedicatedMemoryPage(
 	defer func() {
 		if err != nil {
 			a.logger.Debug("    Allocator::allocateDedicatedMemoryPage FAILED")
-			a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, size, mem)
+			a.deviceMemory.FreeVulkanMemory(a.driver, memoryTypeIndex, size, mem)
 		}
 	}()
 
 	if doMap {
 		// Set up our persistent map
-		_, res, err = mem.Map(1, 0, common.WholeSize, 0)
+		_, res, err = mem.Map(a.driver, 1, 0, common.WholeSize, 0)
 		if err != nil {
 			return res, err
 		}
@@ -461,7 +460,7 @@ func (a *Allocator) allocateDedicatedMemory(
 	if len(allocations) == 0 {
 		panic("called Allocator::allocateDedicatedMemory with empty allocation list")
 	}
-	if dedicatedBuffer != nil && dedicatedImage != nil {
+	if dedicatedBuffer.Initialized() && dedicatedImage.Initialized() {
 		panic("called Allocator::allocateDedicatedMemory with both dedicatedBuffer and dedicatedImage - only one is permitted")
 	}
 
@@ -473,11 +472,11 @@ func (a *Allocator) allocateDedicatedMemory(
 
 	if a.extensionData.DedicatedAllocations && !canAliasMemory {
 		dedicatedAllocInfo := khr_dedicated_allocation.MemoryDedicatedAllocateInfo{}
-		if dedicatedBuffer != nil {
+		if dedicatedBuffer.Initialized() {
 			dedicatedAllocInfo.Buffer = dedicatedBuffer
 			dedicatedAllocInfo.Next = allocInfo.Next
 			allocInfo.Next = dedicatedAllocInfo
-		} else if dedicatedImage != nil {
+		} else if dedicatedImage.Initialized() {
 			dedicatedAllocInfo.Image = dedicatedImage
 			dedicatedAllocInfo.Next = allocInfo.Next
 			allocInfo.Next = dedicatedAllocInfo
@@ -487,10 +486,10 @@ func (a *Allocator) allocateDedicatedMemory(
 	if a.extensionData.BufferDeviceAddress != nil {
 		allocFlagsInfo := core1_1.MemoryAllocateFlagsInfo{}
 		canContainBufferWithDeviceAddress := true
-		if dedicatedBuffer != nil {
+		if dedicatedBuffer.Initialized() {
 			canContainBufferWithDeviceAddress = dedicatedBufferOrImageUsage == nil ||
 				(core1_0.BufferUsageFlags(*dedicatedBufferOrImageUsage)&khr_buffer_device_address.BufferUsageShaderDeviceAddress != 0)
-		} else if dedicatedImage != nil {
+		} else if dedicatedImage.Initialized() {
 			canContainBufferWithDeviceAddress = false
 		}
 
@@ -558,7 +557,7 @@ func (a *Allocator) allocateDedicatedMemory(
 	for allocIndex > 0 {
 		allocIndex--
 
-		a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, allocations[allocIndex].Size(), allocations[allocIndex].memory)
+		a.deviceMemory.FreeVulkanMemory(a.driver, memoryTypeIndex, allocations[allocIndex].Size(), allocations[allocIndex].memory)
 		a.deviceMemory.RemoveAllocation(a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex), allocations[allocIndex].Size())
 	}
 
@@ -831,7 +830,7 @@ func (a *Allocator) AllocateMemory(memoryRequirements *core1_0.MemoryRequirement
 		memoryRequirements,
 		false,
 		false,
-		nil, nil, nil,
+		core1_0.Buffer{}, core1_0.Image{}, nil,
 		&o,
 		SuballocationUnknown,
 		outAllocSlice,
@@ -877,8 +876,8 @@ func (a *Allocator) AllocateMemorySlice(memoryRequirements *core1_0.MemoryRequir
 		memoryRequirements,
 		false,
 		false,
-		nil,
-		nil,
+		core1_0.Buffer{},
+		core1_0.Image{},
 		nil,
 		&o,
 		SuballocationUnknown,
@@ -902,8 +901,8 @@ func (a *Allocator) AllocateMemorySlice(memoryRequirements *core1_0.MemoryRequir
 func (a *Allocator) AllocateMemoryForBuffer(buffer core1_0.Buffer, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
 	a.logger.Debug("Allocator::AllocateMemoryForBuffer")
 
-	if buffer == nil {
-		return core1_0.VKErrorUnknown, errors.New("attempted to allocate for a nil buffer")
+	if !buffer.Initialized() {
+		return core1_0.VKErrorUnknown, errors.New("attempted to allocate for an uninitialized buffer")
 	} else if outAlloc == nil {
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil allocation")
 	} else if outAlloc.memory != nil {
@@ -923,7 +922,7 @@ func (a *Allocator) AllocateMemoryForBuffer(buffer core1_0.Buffer, o AllocationC
 		requiresDedicated,
 		prefersDedicated,
 		buffer,
-		nil,
+		core1_0.Image{},
 		nil,
 		&o,
 		SuballocationBuffer,
@@ -940,7 +939,7 @@ func (a *Allocator) getBufferMemoryRequirements(buffer core1_0.Buffer, memoryReq
 			},
 		}
 
-		err = a.extensionData.GetMemoryRequirements.BufferMemoryRequirements2(
+		err = a.extensionData.GetMemoryRequirements.GetBufferMemoryRequirements2(
 			core1_1.BufferMemoryRequirementsInfo2{
 				Buffer: buffer,
 			},
@@ -953,7 +952,7 @@ func (a *Allocator) getBufferMemoryRequirements(buffer core1_0.Buffer, memoryReq
 		return dedicatedReqs.RequiresDedicatedAllocation, dedicatedReqs.PrefersDedicatedAllocation, nil
 	}
 
-	*memoryRequirements = *buffer.MemoryRequirements()
+	*memoryRequirements = *a.driver.GetBufferMemoryRequirements(buffer)
 	return false, false, nil
 }
 
@@ -973,7 +972,7 @@ func (a *Allocator) getBufferMemoryRequirements(buffer core1_0.Buffer, memoryReq
 func (a *Allocator) AllocateMemoryForImage(image core1_0.Image, o AllocationCreateInfo, outAlloc *Allocation) (common.VkResult, error) {
 	a.logger.Debug("Allocator::AllocateMemoryForImage")
 
-	if image == nil {
+	if !image.Initialized() {
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate for a nil image")
 	} else if outAlloc == nil {
 		return core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil allocation")
@@ -993,7 +992,7 @@ func (a *Allocator) AllocateMemoryForImage(image core1_0.Image, o AllocationCrea
 		&memReqs,
 		requiresDedicated,
 		prefersDedicated,
-		nil,
+		core1_0.Buffer{},
 		image,
 		nil,
 		&o,
@@ -1011,7 +1010,7 @@ func (a *Allocator) getImageMemoryRequirements(image core1_0.Image, memoryRequir
 			},
 		}
 
-		err = a.extensionData.GetMemoryRequirements.ImageMemoryRequirements2(
+		err = a.extensionData.GetMemoryRequirements.GetImageMemoryRequirements2(
 			core1_1.ImageMemoryRequirementsInfo2{
 				Image: image,
 			},
@@ -1024,7 +1023,7 @@ func (a *Allocator) getImageMemoryRequirements(image core1_0.Image, memoryRequir
 		return dedicatedReqs.RequiresDedicatedAllocation, dedicatedReqs.PrefersDedicatedAllocation, nil
 	}
 
-	*memoryRequirements = *image.MemoryRequirements()
+	*memoryRequirements = *a.driver.GetImageMemoryRequirements(image)
 	return false, false, nil
 }
 
@@ -1088,7 +1087,7 @@ func (a *Allocator) freeDedicatedMemory(alloc *Allocation) {
 		parentPool.dedicatedAllocations.Unregister(alloc)
 	}
 
-	a.deviceMemory.FreeVulkanMemory(memoryTypeIndex, alloc.Size(), alloc.memory)
+	a.deviceMemory.FreeVulkanMemory(a.driver, memoryTypeIndex, alloc.Size(), alloc.memory)
 
 	heapIndex := a.deviceMemory.MemoryTypeIndexToHeapIndex(memoryTypeIndex)
 	a.deviceMemory.RemoveAllocation(heapIndex, alloc.Size())
@@ -1158,9 +1157,9 @@ func (a *Allocator) flushOrInvalidateAllocations(allocations []Allocation, offse
 
 	switch operation {
 	case vulkan.CacheOperationFlush:
-		return a.device.FlushMappedMemoryRanges(ranges)
+		return a.driver.FlushMappedMemoryRanges(ranges...)
 	case vulkan.CacheOperationInvalidate:
-		return a.device.InvalidateMappedMemoryRanges(ranges)
+		return a.driver.InvalidateMappedMemoryRanges(ranges...)
 	}
 
 	panic(fmt.Sprintf("unknown cache operation %s", operation.String()))
@@ -1385,9 +1384,9 @@ func (a *Allocator) CreateBuffer(bufferInfo core1_0.BufferCreateInfo, allocInfo 
 	a.logger.Debug("Allocator::CreateBuffer")
 
 	if outAlloc == nil {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
+		return core1_0.Buffer{}, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
 	} else if outAlloc.memory != nil {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
+		return core1_0.Buffer{}, core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
 	}
 
 	return a.createBuffer(&bufferInfo, &allocInfo, 0, outAlloc)
@@ -1417,14 +1416,14 @@ func (a *Allocator) CreateBufferWithAlignment(bufferInfo core1_0.BufferCreateInf
 	a.logger.Debug("Allocator::CreateBufferWithAlignment")
 
 	if outAlloc == nil {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
+		return core1_0.Buffer{}, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
 	} else if outAlloc.memory != nil {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
+		return core1_0.Buffer{}, core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
 	}
 
 	err := memutils.CheckPow2(minAlignment, "minAlignment")
 	if err != nil {
-		return nil, core1_0.VKErrorUnknown, err
+		return core1_0.Buffer{}, core1_0.VKErrorUnknown, err
 	}
 
 	return a.createBuffer(&bufferInfo, &allocInfo, minAlignment, outAlloc)
@@ -1443,21 +1442,21 @@ func (a *Allocator) createBuffer(bufferInfo *core1_0.BufferCreateInfo, allocatio
 	}
 
 	if bufferInfo.Size == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate a 0-sized buffer")
+		return core1_0.Buffer{}, core1_0.VKErrorUnknown, errors.New("attempted to allocate a 0-sized buffer")
 	} else if bufferInfo.Usage&khr_buffer_device_address.BufferUsageShaderDeviceAddress != 0 && a.extensionData.BufferDeviceAddress == nil {
-		return nil, core1_0.VKErrorExtensionNotPresent, errors.New("attempted to use BufferUsageShaderDeviceAddress, but khr_buffer_device_address is not loaded")
+		return core1_0.Buffer{}, core1_0.VKErrorExtensionNotPresent, errors.New("attempted to use BufferUsageShaderDeviceAddress, but khr_buffer_device_address is not loaded")
 	}
 
-	buffer, res, err = a.device.CreateBuffer(
+	buffer, res, err = a.driver.CreateBuffer(
 		a.allocationCallbacks,
 		*bufferInfo,
 	)
 	if err != nil {
-		return nil, res, err
+		return core1_0.Buffer{}, res, err
 	}
 	defer func() {
 		if err != nil {
-			buffer.Destroy(a.allocationCallbacks)
+			a.driver.DestroyBuffer(buffer, a.allocationCallbacks)
 		}
 	}()
 
@@ -1480,7 +1479,7 @@ func (a *Allocator) createBuffer(bufferInfo *core1_0.BufferCreateInfo, allocatio
 		requiresDedicated,
 		prefersDedicated,
 		buffer,
-		nil,
+		core1_0.Image{},
 		&bufferOrImage,
 		allocationInfo,
 		SuballocationBuffer,
@@ -1718,29 +1717,29 @@ func (a *Allocator) CreateImage(imageInfo core1_0.ImageCreateInfo, allocInfo All
 	a.logger.Debug("Allocator::CreateImage")
 
 	if outAlloc == nil {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to allocate into a nil Allocation")
 	} else if outAlloc.memory != nil {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to overwrite an unfreed allocation")
 	}
 
 	if imageInfo.Extent.Width == 0 ||
 		imageInfo.Extent.Height == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create a 0-sized image")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to create a 0-sized image")
 	} else if imageInfo.Extent.Depth == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create a 0-depth image")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to create a 0-depth image")
 	} else if imageInfo.MipLevels == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 mip levels")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 mip levels")
 	} else if imageInfo.ArrayLayers == 0 {
-		return nil, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 array layers")
+		return core1_0.Image{}, core1_0.VKErrorUnknown, errors.New("attempted to create an image with 0 array layers")
 	}
 
-	image, res, err = a.device.CreateImage(a.allocationCallbacks, imageInfo)
+	image, res, err = a.driver.CreateImage(a.allocationCallbacks, imageInfo)
 	if err != nil {
 		return image, res, err
 	}
 	defer func() {
 		if err != nil {
-			image.Destroy(a.allocationCallbacks)
+			a.driver.DestroyImage(image, a.allocationCallbacks)
 		}
 	}()
 
@@ -1763,7 +1762,7 @@ func (a *Allocator) CreateImage(imageInfo core1_0.ImageCreateInfo, allocInfo All
 		&memReqs,
 		requiresDedicated,
 		prefersDedicated,
-		nil,
+		core1_0.Buffer{},
 		image,
 		&bufferOrImage,
 		&allocInfo,

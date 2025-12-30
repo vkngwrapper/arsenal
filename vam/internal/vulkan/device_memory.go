@@ -8,13 +8,13 @@ import (
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/vam/internal/utils"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/core1_1"
-	"github.com/vkngwrapper/core/v2/driver"
-	"github.com/vkngwrapper/extensions/v2/amd_device_coherent_memory"
-	"github.com/vkngwrapper/extensions/v2/ext_memory_budget"
-	"github.com/vkngwrapper/extensions/v2/khr_external_memory_capabilities"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/core/v3/core1_1"
+	"github.com/vkngwrapper/core/v3/loader"
+	"github.com/vkngwrapper/extensions/v3/amd_device_coherent_memory"
+	"github.com/vkngwrapper/extensions/v3/ext_memory_budget"
+	"github.com/vkngwrapper/extensions/v3/khr_external_memory_capabilities"
 )
 
 type Budget struct {
@@ -57,7 +57,7 @@ type DeviceMemoryProperties struct {
 
 	// Whether the SynchronizedMemory objects created from this object should use a mutex to control access
 	useMutex            bool
-	allocationCallbacks *driver.AllocationCallbacks
+	allocationCallbacks *loader.AllocationCallbacks
 	memoryCallbacks     MemoryCallbacks
 	extensions          *ExtensionData
 	memoryCount         atomic.Uint32
@@ -71,8 +71,9 @@ type DeviceMemoryProperties struct {
 }
 
 func NewDeviceMemoryProperties(
+	driver core1_0.CoreDeviceDriver,
 	useMutex bool,
-	allocationCallbacks *driver.AllocationCallbacks,
+	allocationCallbacks *loader.AllocationCallbacks,
 	memoryCallbacks MemoryCallbacks,
 	device core1_0.Device,
 	physicalDevice core1_0.PhysicalDevice,
@@ -91,12 +92,12 @@ func NewDeviceMemoryProperties(
 	}
 
 	var err error
-	deviceProperties.deviceProperties, err = physicalDevice.Properties()
+	deviceProperties.deviceProperties, err = driver.InstanceDriver().GetPhysicalDeviceProperties(physicalDevice)
 	if err != nil {
 		return nil, err
 	}
 
-	deviceProperties.memoryProperties = physicalDevice.MemoryProperties()
+	deviceProperties.memoryProperties = driver.InstanceDriver().GetPhysicalDeviceMemoryProperties(physicalDevice)
 
 	err = memutils.CheckPow2(deviceProperties.deviceProperties.Limits.BufferImageGranularity, "device bufferImageGranularity")
 	if err != nil {
@@ -213,6 +214,7 @@ func (m *DeviceMemoryProperties) removeBlockAllocation(heapIndex, allocationSize
 }
 
 func (m *DeviceMemoryProperties) AllocateVulkanMemory(
+	driver core1_0.DeviceDriver,
 	allocateInfo core1_0.MemoryAllocateInfo,
 ) (mem *SynchronizedMemory, res common.VkResult, err error) {
 	newDeviceCount := m.memoryCount.Add(1)
@@ -251,7 +253,7 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	}()
 
 	mem, res, err = allocateSynchronizedMemory(
-		m.device,
+		driver,
 		m.useMutex,
 		m.allocationCallbacks,
 		m.extensions,
@@ -274,7 +276,7 @@ func (m *DeviceMemoryProperties) AllocateVulkanMemory(
 	return mem, res, nil
 }
 
-func (m *DeviceMemoryProperties) FreeVulkanMemory(memoryType int, size int, memory *SynchronizedMemory) {
+func (m *DeviceMemoryProperties) FreeVulkanMemory(driver core1_0.DeviceDriver, memoryType int, size int, memory *SynchronizedMemory) {
 	if m.memoryCallbacks != nil {
 		m.memoryCallbacks.Free(
 			memoryType,
@@ -283,7 +285,7 @@ func (m *DeviceMemoryProperties) FreeVulkanMemory(memoryType int, size int, memo
 		)
 	}
 
-	memory.FreeMemory()
+	memory.FreeMemory(driver)
 
 	heapIndex := m.MemoryTypeIndexToHeapIndex(memoryType)
 	m.removeBlockAllocation(heapIndex, size)
@@ -374,16 +376,16 @@ func init() {
 	cacheOperationMapping[CacheOperationInvalidate] = "CacheOperationInvalidate"
 }
 
-func (m *DeviceMemoryProperties) FlushOrInvalidateAllocations(memRanges []core1_0.MappedMemoryRange, operation CacheOperation) (common.VkResult, error) {
+func (m *DeviceMemoryProperties) FlushOrInvalidateAllocations(driver core1_0.DeviceDriver, memRanges []core1_0.MappedMemoryRange, operation CacheOperation) (common.VkResult, error) {
 	if len(memRanges) == 0 {
 		return core1_0.VKSuccess, nil
 	}
 
 	switch operation {
 	case CacheOperationFlush:
-		return m.device.FlushMappedMemoryRanges(memRanges)
+		return driver.FlushMappedMemoryRanges(memRanges...)
 	case CacheOperationInvalidate:
-		return m.device.InvalidateMappedMemoryRanges(memRanges)
+		return driver.InvalidateMappedMemoryRanges(memRanges...)
 	}
 
 	return core1_0.VKErrorUnknown, errors.Errorf("attempted to carry out invalid cache operation %s", operation.String())
@@ -436,7 +438,8 @@ func (m *DeviceMemoryProperties) UpdateVulkanBudget() {
 	memProps := core1_1.PhysicalDeviceMemoryProperties2{}
 	memProps.Next = &budgetProps
 
-	err := m.extensions.GetPhysicalDeviceProperties2.MemoryProperties2(
+	err := m.extensions.GetPhysicalDeviceProperties2.GetPhysicalDeviceMemoryProperties2(
+		m.physicalDevice,
 		&memProps,
 	)
 	if err != nil {

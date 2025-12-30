@@ -12,12 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/defrag"
-	"github.com/vkngwrapper/core/v2"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/extensions/v2/ext_debug_utils"
-	"github.com/vkngwrapper/extensions/v2/khr_portability_enumeration"
-	"github.com/vkngwrapper/extensions/v2/khr_portability_subset"
+	"github.com/vkngwrapper/core/v3"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/extensions/v3/ext_debug_utils"
+	"github.com/vkngwrapper/extensions/v3/khr_portability_enumeration"
+	"github.com/vkngwrapper/extensions/v3/khr_portability_subset"
 )
 
 func logDebug(msgType ext_debug_utils.DebugUtilsMessageTypeFlags, severity ext_debug_utils.DebugUtilsMessageSeverityFlags, data *ext_debug_utils.DebugUtilsMessengerCallbackData) bool {
@@ -25,18 +25,18 @@ func logDebug(msgType ext_debug_utils.DebugUtilsMessageTypeFlags, severity ext_d
 	return false
 }
 
-func createApplication(t require.TestingT, name string) (core1_0.Instance, ext_debug_utils.DebugUtilsMessenger, core1_0.PhysicalDevice, core1_0.Device) {
+func createApplication(t require.TestingT, name string) (ext_debug_utils.ExtensionDriver, ext_debug_utils.DebugUtilsMessenger, core1_0.PhysicalDevice, core1_0.CoreDeviceDriver) {
 	// Because benchmarks that use createApplication and destroyApplication will repeatedly create and
 	// destroy instance & device, it runs into https://github.com/golang/go/issues/59724 on windows,
 	// so we need to lock the OS as a workaround
 	runtime.LockOSThread()
 
-	loader, err := core.CreateSystemLoader()
+	globalDriver, err := core.CreateSystemDriver()
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	instanceExtensions, _, err := loader.AvailableExtensions()
+	instanceExtensions, _, err := globalDriver.AvailableExtensions()
 	require.NoError(t, err)
 
 	instanceExtensionNames := []string{ext_debug_utils.ExtensionName}
@@ -47,7 +47,7 @@ func createApplication(t require.TestingT, name string) (core1_0.Instance, ext_d
 		flags |= khr_portability_enumeration.InstanceCreateEnumeratePortability
 	}
 
-	instance, _, err := loader.CreateInstance(nil, core1_0.InstanceCreateInfo{
+	instance, _, err := globalDriver.CreateInstance(nil, core1_0.InstanceCreateInfo{
 		ApplicationName:       name,
 		ApplicationVersion:    common.CreateVersion(1, 0, 0),
 		EngineName:            "go test",
@@ -63,21 +63,24 @@ func createApplication(t require.TestingT, name string) (core1_0.Instance, ext_d
 	})
 	require.NoError(t, err)
 
-	debugLoader := ext_debug_utils.CreateExtensionFromInstance(instance)
-	debugMessenger, _, err := debugLoader.CreateDebugUtilsMessenger(instance, nil, ext_debug_utils.DebugUtilsMessengerCreateInfo{
+	instanceDriver, err := globalDriver.BuildInstanceDriver(instance)
+	require.NoError(t, err)
+
+	debugLoader := ext_debug_utils.CreateExtensionDriverFromCoreDriver(instanceDriver)
+	debugMessenger, _, err := debugLoader.CreateDebugUtilsMessenger(nil, ext_debug_utils.DebugUtilsMessengerCreateInfo{
 		MessageSeverity: ext_debug_utils.SeverityError | ext_debug_utils.SeverityWarning,
 		MessageType:     ext_debug_utils.TypeGeneral | ext_debug_utils.TypeValidation | ext_debug_utils.TypePerformance,
 		UserCallback:    logDebug,
 	})
 	require.NoError(t, err)
 
-	gpus, _, err := instance.EnumeratePhysicalDevices()
+	gpus, _, err := instanceDriver.EnumeratePhysicalDevices()
 	require.NoError(t, err)
 
 	physDevice := gpus[0]
 
 	graphicsFamily := -1
-	queueProps := physDevice.QueueFamilyProperties()
+	queueProps := instanceDriver.GetPhysicalDeviceQueueFamilyProperties(physDevice)
 	for queueIndex, queueFamily := range queueProps {
 		if queueFamily.QueueFlags&core1_0.QueueGraphics != 0 {
 			graphicsFamily = queueIndex
@@ -87,7 +90,7 @@ func createApplication(t require.TestingT, name string) (core1_0.Instance, ext_d
 	require.GreaterOrEqual(t, graphicsFamily, 0)
 
 	var deviceExtensionNames []string
-	deviceExtensions, _, err := physDevice.EnumerateDeviceExtensionProperties()
+	deviceExtensions, _, err := instanceDriver.EnumerateDeviceExtensionProperties(physDevice)
 	require.NoError(t, err)
 
 	_, ok = deviceExtensions[khr_portability_subset.ExtensionName]
@@ -95,7 +98,7 @@ func createApplication(t require.TestingT, name string) (core1_0.Instance, ext_d
 		deviceExtensionNames = append(deviceExtensionNames, khr_portability_subset.ExtensionName)
 	}
 
-	device, _, err := physDevice.CreateDevice(nil, core1_0.DeviceCreateInfo{
+	device, _, err := instanceDriver.CreateDevice(physDevice, nil, core1_0.DeviceCreateInfo{
 		QueueCreateInfos: []core1_0.DeviceQueueCreateInfo{
 			{
 				QueueFamilyIndex: graphicsFamily,
@@ -106,16 +109,18 @@ func createApplication(t require.TestingT, name string) (core1_0.Instance, ext_d
 	})
 	require.NoError(t, err)
 
-	return instance, debugMessenger, physDevice, device
+	driver, err := instanceDriver.BuildDeviceDriver(device)
+
+	return debugLoader, debugMessenger, physDevice, driver
 }
 
-func destroyApplication(t require.TestingT, instance core1_0.Instance, debugMessenger ext_debug_utils.DebugUtilsMessenger, device core1_0.Device) {
-	_, err := device.WaitIdle()
+func destroyApplication(t require.TestingT, debugDriver ext_debug_utils.ExtensionDriver, debugMessenger ext_debug_utils.DebugUtilsMessenger, driver core1_0.CoreDeviceDriver) {
+	_, err := driver.DeviceWaitIdle()
 	require.NoError(t, err)
 
-	device.Destroy(nil)
-	debugMessenger.Destroy(nil)
-	instance.Destroy(nil)
+	driver.DestroyDevice(nil)
+	debugDriver.DestroyDebugUtilsMessenger(debugMessenger, nil)
+	driver.InstanceDriver().DestroyInstance(nil)
 
 	runtime.UnlockOSThread()
 }
@@ -130,12 +135,12 @@ func checkCorruption(t require.TestingT, allocator *Allocator) {
 }
 
 func BenchmarkCreateAllocation(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocation")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkCreateAllocation")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -160,12 +165,12 @@ func BenchmarkCreateAllocation(b *testing.B) {
 }
 
 func BenchmarkCreateAllocationSlice(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkCreateAllocationSlice")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkCreateAllocationSlice")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -190,12 +195,12 @@ func BenchmarkCreateAllocationSlice(b *testing.B) {
 }
 
 func BenchmarkMapAlloc(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkMapAlloc")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkMapAlloc")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -237,12 +242,12 @@ func BenchmarkMapAlloc(b *testing.B) {
 }
 
 func BenchmarkPoolAlloc(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkPoolAlloc")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkPoolAlloc")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -291,12 +296,12 @@ func BenchmarkPoolAlloc(b *testing.B) {
 }
 
 func BenchmarkAllocator_BuildStatsString(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkPoolAlloc")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkPoolAlloc")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -348,12 +353,12 @@ func BenchmarkAllocator_BuildStatsString(b *testing.B) {
 }
 
 func BenchmarkPoolAllocSlice(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkPoolAllocSlice")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkPoolAllocSlice")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -390,12 +395,12 @@ func BenchmarkPoolAllocSlice(b *testing.B) {
 }
 
 func BenchmarkAllocDedicated(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDedicated")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkAllocDedicated")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -421,12 +426,12 @@ func BenchmarkAllocDedicated(b *testing.B) {
 }
 
 func BenchmarkAllocDefragFast(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragFast")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkAllocDefragFast")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -486,12 +491,12 @@ func BenchmarkAllocDefragFast(b *testing.B) {
 }
 
 func BenchmarkAllocDefragFull(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragFull")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkAllocDefragFull")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -548,12 +553,12 @@ func BenchmarkAllocDefragFull(b *testing.B) {
 }
 
 func BenchmarkAllocDefragBig(b *testing.B) {
-	instance, messenger, physDevice, device := createApplication(b, "BenchmarkAllocDefragBig")
-	defer destroyApplication(b, instance, messenger, device)
+	debugExtension, messenger, physDevice, driver := createApplication(b, "BenchmarkAllocDefragBig")
+	defer destroyApplication(b, debugExtension, messenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -610,12 +615,12 @@ func BenchmarkAllocDefragBig(b *testing.B) {
 }
 
 func BenchmarkBuffer(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkBuffer")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkBuffer")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())
@@ -639,12 +644,12 @@ func BenchmarkBuffer(b *testing.B) {
 }
 
 func BenchmarkImage(b *testing.B) {
-	instance, debugMessenger, physDevice, device := createApplication(b, "BenchmarkBuffer")
-	defer destroyApplication(b, instance, debugMessenger, device)
+	debugExtension, debugMessenger, physDevice, driver := createApplication(b, "BenchmarkBuffer")
+	defer destroyApplication(b, debugExtension, debugMessenger, driver)
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	allocator, err := New(logger, instance, physDevice, device, CreateOptions{})
+	allocator, err := New(logger, driver, physDevice, CreateOptions{})
 	require.NoError(b, err)
 	defer func() {
 		require.NoError(b, allocator.Destroy())

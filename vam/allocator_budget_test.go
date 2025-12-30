@@ -4,20 +4,21 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
-	"github.com/vkngwrapper/core/v2/core1_1"
-	"github.com/vkngwrapper/core/v2/core1_2"
-	"github.com/vkngwrapper/core/v2/mocks"
-	"github.com/vkngwrapper/extensions/v2/ext_memory_budget"
-	"github.com/vkngwrapper/extensions/v2/ext_memory_priority"
+	"github.com/vkngwrapper/core/v3/common"
+	"github.com/vkngwrapper/core/v3/core1_0"
+	"github.com/vkngwrapper/core/v3/core1_1"
+	"github.com/vkngwrapper/core/v3/core1_2"
+	"github.com/vkngwrapper/core/v3/mocks"
+	"github.com/vkngwrapper/core/v3/mocks/mocks1_2"
+	"github.com/vkngwrapper/extensions/v3/ext_memory_budget"
+	"github.com/vkngwrapper/extensions/v3/ext_memory_priority"
 	"go.uber.org/mock/gomock"
 )
 
 func TestAllocateMemoryWithBudgetForceDedicated(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -49,8 +50,8 @@ func TestAllocateMemoryWithBudgetForceDedicated(t *testing.T) {
 			},
 		},
 		AllocatorOptions: CreateOptions{},
-		PreNewMock: func(instance *mocks.Instance1_2, instancePhysDevice *mocks.InstanceScopedPhysicalDevice1_2, physDevice *mocks.PhysicalDevice1_2, device *mocks.Device1_2) {
-			instancePhysDevice.EXPECT().MemoryProperties2(gomock.Any()).DoAndReturn(func(out *core1_1.PhysicalDeviceMemoryProperties2) error {
+		PreNewMock: func(driver *mocks1_2.MockCoreDeviceDriver, physDevice core1_0.PhysicalDevice) {
+			driver.InstanceDriver().(*mocks1_2.MockCoreInstanceDriver).EXPECT().GetPhysicalDeviceMemoryProperties2(physDevice, gomock.Any()).DoAndReturn(func(physDevice core1_0.PhysicalDevice, out *core1_1.PhysicalDeviceMemoryProperties2) error {
 				budget := out.Next.(*ext_memory_budget.PhysicalDeviceMemoryBudgetProperties)
 				budget.HeapBudget[0] = 1500
 				budget.HeapUsage[0] = 100
@@ -65,8 +66,8 @@ func TestAllocateMemoryWithBudgetForceDedicated(t *testing.T) {
 
 	// The block will be tiny because we're trying to fit into the remaining memory budget so we'll do a dedicated
 	// allocation
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 1000)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  1000,
 		NextOptions: common.NextOptions{
@@ -80,7 +81,7 @@ func TestAllocateMemoryWithBudgetForceDedicated(t *testing.T) {
 			},
 		},
 	}).Return(memory, core1_0.VKSuccess, nil)
-	memory.EXPECT().Free(gomock.Any())
+	driver.EXPECT().FreeMemory(memory, nil)
 
 	var allocation Allocation
 	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
@@ -103,7 +104,7 @@ func TestAllocateMemoryWithBudgetForceDedicated(t *testing.T) {
 func TestAllocateMemoryWithBudgetRequestDedicated(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -135,8 +136,8 @@ func TestAllocateMemoryWithBudgetRequestDedicated(t *testing.T) {
 			},
 		},
 		AllocatorOptions: CreateOptions{},
-		PreNewMock: func(instance *mocks.Instance1_2, instancePhysDevice *mocks.InstanceScopedPhysicalDevice1_2, physDevice *mocks.PhysicalDevice1_2, device *mocks.Device1_2) {
-			instancePhysDevice.EXPECT().MemoryProperties2(gomock.Any()).DoAndReturn(func(out *core1_1.PhysicalDeviceMemoryProperties2) error {
+		PreNewMock: func(driver *mocks1_2.MockCoreDeviceDriver, physDevice core1_0.PhysicalDevice) {
+			driver.InstanceDriver().(*mocks1_2.MockCoreInstanceDriver).EXPECT().GetPhysicalDeviceMemoryProperties2(physDevice, gomock.Any()).DoAndReturn(func(physDevice core1_0.PhysicalDevice, out *core1_1.PhysicalDeviceMemoryProperties2) error {
 				budget := out.Next.(*ext_memory_budget.PhysicalDeviceMemoryBudgetProperties)
 				budget.HeapBudget[0] = 1500
 				budget.HeapUsage[0] = 100
@@ -151,8 +152,8 @@ func TestAllocateMemoryWithBudgetRequestDedicated(t *testing.T) {
 
 	// The block will be tiny because we're trying to fit into the remaining memory budget so we'll do a dedicated
 	// allocation
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 1000)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  1000,
 		NextOptions: common.NextOptions{
@@ -166,7 +167,7 @@ func TestAllocateMemoryWithBudgetRequestDedicated(t *testing.T) {
 			},
 		},
 	}).Return(memory, core1_0.VKSuccess, nil)
-	memory.EXPECT().Free(gomock.Any())
+	driver.EXPECT().FreeMemory(memory, nil)
 
 	var allocation Allocation
 	_, err := allocator.AllocateMemory(&core1_0.MemoryRequirements{
@@ -189,7 +190,7 @@ func TestAllocateMemoryWithBudgetRequestDedicated(t *testing.T) {
 func TestAllocateMemoryWithBudgetCantFit(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	_, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -221,8 +222,8 @@ func TestAllocateMemoryWithBudgetCantFit(t *testing.T) {
 			},
 		},
 		AllocatorOptions: CreateOptions{},
-		PreNewMock: func(instance *mocks.Instance1_2, instancePhysDevice *mocks.InstanceScopedPhysicalDevice1_2, physDevice *mocks.PhysicalDevice1_2, device *mocks.Device1_2) {
-			instancePhysDevice.EXPECT().MemoryProperties2(gomock.Any()).DoAndReturn(func(out *core1_1.PhysicalDeviceMemoryProperties2) error {
+		PreNewMock: func(driver *mocks1_2.MockCoreDeviceDriver, physDevice core1_0.PhysicalDevice) {
+			driver.InstanceDriver().(*mocks1_2.MockCoreInstanceDriver).EXPECT().GetPhysicalDeviceMemoryProperties2(physDevice, gomock.Any()).DoAndReturn(func(physDevice core1_0.PhysicalDevice, out *core1_1.PhysicalDeviceMemoryProperties2) error {
 				budget := out.Next.(*ext_memory_budget.PhysicalDeviceMemoryBudgetProperties)
 				budget.HeapBudget[0] = 1500
 				budget.HeapUsage[0] = 700
@@ -252,7 +253,7 @@ func TestAllocateMemoryWithBudgetCantFit(t *testing.T) {
 func TestAllocateMemoryWithBudget(t *testing.T) {
 	ctrl := gomock.NewController(t)
 
-	_, _, _, device, allocator := readyAllocator(t, ctrl, AllocatorSetup{
+	driver, _, allocator := readyAllocator(t, ctrl, AllocatorSetup{
 		DeviceVersion: common.Vulkan1_2,
 		MemoryTypes: []core1_0.MemoryType{
 			{
@@ -284,8 +285,8 @@ func TestAllocateMemoryWithBudget(t *testing.T) {
 			},
 		},
 		AllocatorOptions: CreateOptions{},
-		PreNewMock: func(instance *mocks.Instance1_2, instancePhysDevice *mocks.InstanceScopedPhysicalDevice1_2, physDevice *mocks.PhysicalDevice1_2, device *mocks.Device1_2) {
-			instancePhysDevice.EXPECT().MemoryProperties2(gomock.Any()).DoAndReturn(func(out *core1_1.PhysicalDeviceMemoryProperties2) error {
+		PreNewMock: func(driver *mocks1_2.MockCoreDeviceDriver, physDevice core1_0.PhysicalDevice) {
+			driver.InstanceDriver().(*mocks1_2.MockCoreInstanceDriver).EXPECT().GetPhysicalDeviceMemoryProperties2(physDevice, gomock.Any()).DoAndReturn(func(physDevice core1_0.PhysicalDevice, out *core1_1.PhysicalDeviceMemoryProperties2) error {
 				budget := out.Next.(*ext_memory_budget.PhysicalDeviceMemoryBudgetProperties)
 				budget.HeapBudget[0] = 16000
 				budget.HeapUsage[0] = 300
@@ -301,8 +302,8 @@ func TestAllocateMemoryWithBudget(t *testing.T) {
 	// Expect a block to be allocated, the default preferred size for a 1MB heap is
 	// 128KB (125024) but it will size down by half 3 times because the allocation is so small
 	// resulting in 15628
-	memory := mocks.EasyMockDeviceMemory(ctrl)
-	device.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
+	memory := mocks.NewDummyDeviceMemory(driver.Device(), 15628)
+	driver.EXPECT().AllocateMemory(gomock.Any(), core1_0.MemoryAllocateInfo{
 		MemoryTypeIndex: 0,
 		AllocationSize:  15628,
 		NextOptions: common.NextOptions{

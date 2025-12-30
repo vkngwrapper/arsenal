@@ -7,8 +7,6 @@ import (
 
 	"github.com/vkngwrapper/arsenal/memutils"
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
-	"github.com/vkngwrapper/core/v2/common"
-	"github.com/vkngwrapper/core/v2/core1_0"
 )
 
 // Algorithm identifies which defragmentation algorithm will be used for defrag passes
@@ -249,12 +247,12 @@ func (c *MetadataDefragContext[T]) getMoveData(handle metadata.BlockAllocationHa
 	return c.BlockList.MoveDataForUserData(userData), false
 }
 
-func (c *MetadataDefragContext[T]) allocFromBlock(blockIndex int, mtData metadata.BlockMetadata, size int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *T) (common.VkResult, error) {
+func (c *MetadataDefragContext[T]) allocFromBlock(blockIndex int, mtData metadata.BlockMetadata, size int, alignment uint, flags uint32, userData any, suballocType uint32, outAlloc *T) error {
 	success, currRequest, err := mtData.CreateAllocationRequest(size, alignment, false, suballocType, 0, math.MaxInt)
 	if err != nil {
-		return core1_0.VKErrorUnknown, err
+		return err
 	} else if !success {
-		return core1_0.VKErrorOutOfDeviceMemory, nil
+		return fmt.Errorf("out of block memory")
 	}
 
 	return c.BlockList.CommitDefragAllocationRequest(currRequest, blockIndex, alignment, flags, userData, suballocType, outAlloc)
@@ -265,16 +263,14 @@ func (c *MetadataDefragContext[T]) allocInOtherBlock(start, end int, data *MoveA
 		dstMetadata := c.BlockList.MetadataForBlock(start)
 		if dstMetadata.MayHaveFreeBlock(data.SuballocationType, data.Move.Size) {
 			data.Move.DstTmpAllocation = c.BlockList.CreateAlloc()
-			res, err := c.allocFromBlock(start, dstMetadata,
+			err := c.allocFromBlock(start, dstMetadata,
 				data.Move.Size,
 				data.Alignment,
 				data.Flags,
 				c,
 				data.SuballocationType,
 				data.Move.DstTmpAllocation)
-			if err != nil {
-				panic(fmt.Sprintf("unexpected error while allocating: %+v", err))
-			} else if res == core1_0.VKSuccess {
+			if err == nil {
 				data.Move.DstBlockMetadata = dstMetadata
 				c.moves = append(c.moves, data.Move)
 				return true
@@ -333,7 +329,7 @@ func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockIndex int
 
 	if success && c.mustFindOffset(mtdata, allocRequest.BlockAllocationHandle) < offset {
 		moveData.Move.DstTmpAllocation = c.BlockList.CreateAlloc()
-		res, err := c.BlockList.CommitDefragAllocationRequest(
+		err = c.BlockList.CommitDefragAllocationRequest(
 			allocRequest,
 			blockIndex,
 			moveData.Alignment,
@@ -346,8 +342,6 @@ func (c *MetadataDefragContext[T]) allocIfLowerOffset(offset int, blockIndex int
 			moveData.Move.DstBlockMetadata = mtdata
 			c.moves = append(c.moves, moveData.Move)
 			return true
-		} else if res == core1_0.VKErrorUnknown {
-			panic(fmt.Sprintf("unexpected error when commiting allocation request for defragment: %+v", err))
 		}
 	}
 

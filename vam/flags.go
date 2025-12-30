@@ -1,6 +1,6 @@
 package vam
 
-import "github.com/vkngwrapper/core/v2/common"
+import "github.com/vkngwrapper/core/v3/common"
 
 // AllocationCreateFlags exposes several options for allocation behavior that can be applied.
 type AllocationCreateFlags int32
