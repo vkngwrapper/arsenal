@@ -47,7 +47,7 @@ func createApplication(t require.TestingT, name string) (ext_debug_utils.Extensi
 		flags |= khr_portability_enumeration.InstanceCreateEnumeratePortability
 	}
 
-	instance, _, err := globalDriver.CreateInstance(nil, core1_0.InstanceCreateInfo{
+	instanceDriver, _, err := globalDriver.CreateInstance(nil, core1_0.InstanceCreateInfo{
 		ApplicationName:       name,
 		ApplicationVersion:    common.CreateVersion(1, 0, 0),
 		EngineName:            "go test",
@@ -62,10 +62,6 @@ func createApplication(t require.TestingT, name string) (ext_debug_utils.Extensi
 		}},
 	})
 	require.NoError(t, err)
-
-	instanceDriver, err := globalDriver.BuildInstanceDriver(instance)
-	require.NoError(t, err)
-
 	debugLoader := ext_debug_utils.CreateExtensionDriverFromCoreDriver(instanceDriver)
 	debugMessenger, _, err := debugLoader.CreateDebugUtilsMessenger(nil, ext_debug_utils.DebugUtilsMessengerCreateInfo{
 		MessageSeverity: ext_debug_utils.SeverityError | ext_debug_utils.SeverityWarning,
@@ -98,7 +94,7 @@ func createApplication(t require.TestingT, name string) (ext_debug_utils.Extensi
 		deviceExtensionNames = append(deviceExtensionNames, khr_portability_subset.ExtensionName)
 	}
 
-	device, _, err := instanceDriver.CreateDevice(physDevice, nil, core1_0.DeviceCreateInfo{
+	driver, _, err := instanceDriver.CreateDevice(physDevice, nil, core1_0.DeviceCreateInfo{
 		QueueCreateInfos: []core1_0.DeviceQueueCreateInfo{
 			{
 				QueueFamilyIndex: graphicsFamily,
@@ -108,8 +104,6 @@ func createApplication(t require.TestingT, name string) (ext_debug_utils.Extensi
 		EnabledExtensionNames: deviceExtensionNames,
 	})
 	require.NoError(t, err)
-
-	driver, err := instanceDriver.BuildDeviceDriver(device)
 
 	return debugLoader, debugMessenger, physDevice, driver
 }
