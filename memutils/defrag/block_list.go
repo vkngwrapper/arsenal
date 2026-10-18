@@ -5,7 +5,7 @@ import (
 	"github.com/vkngwrapper/arsenal/memutils/metadata"
 )
 
-//go:generate mockgen -source block_list.go -destination ./mocks/block_list.go
+//go:generate go run go.uber.org/mock/mockgen -source block_list.go -destination ./mocks/block_list.go
 
 // BlockList is an interface that is used to indicate a single block-bearing memory pool from a consuming application.
 // The defragmentation code uses this to communicate back to a memory pool that holds the allocations being
