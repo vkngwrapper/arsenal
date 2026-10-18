@@ -7,7 +7,6 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/dolthub/swiss"
 	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/pkg/errors"
 	"github.com/vkngwrapper/arsenal/memutils"
@@ -69,7 +68,7 @@ type TLSFBlockMetadata struct {
 	// done in C too).  However, if we don't store tlsfBlock somewhere, go will garbage collect it, so
 	// we use this map.  We just store it in here for safekeeping and then delete it when the block is getting
 	// deleted
-	handleKey *swiss.Map[BlockAllocationHandle, *tlsfBlock]
+	handleKey map[BlockAllocationHandle]*tlsfBlock
 	freeList  []*tlsfBlock
 	nullBlock *tlsfBlock
 	tailBlock *tlsfBlock
@@ -95,12 +94,12 @@ func (m *TLSFBlockMetadata) allocateBlock() *tlsfBlock {
 	b.prevFree = nil
 	b.userData = nil
 	b.blockHandle = BlockAllocationHandle(uintptr(unsafe.Pointer(b)))
-	m.handleKey.Put(b.blockHandle, b)
+	m.handleKey[b.blockHandle] = b
 	return b
 }
 
 func (m *TLSFBlockMetadata) freeBlock(b *tlsfBlock) {
-	m.handleKey.Delete(b.blockHandle)
+	delete(m.handleKey, b.blockHandle)
 	blockAllocator.Put(b)
 }
 
@@ -111,7 +110,7 @@ func (m *TLSFBlockMetadata) getBlock(handle BlockAllocationHandle) (*tlsfBlock, 
 // Init prepares this structure for allocations and sizes the block in bytes based on the parameter size.
 func (m *TLSFBlockMetadata) Init(size int) {
 	m.BlockMetadataBase.Init(size)
-	m.handleKey = swiss.NewMap[BlockAllocationHandle, *tlsfBlock](42)
+	m.handleKey = make(map[BlockAllocationHandle]*tlsfBlock, 42)
 
 	m.nullBlock = m.allocateBlock()
 	m.nullBlock.size = size

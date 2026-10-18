@@ -1,6 +1,6 @@
 package metadata
 
-//go:generate mockgen -source granularity.go -destination ./mocks/granularity.go
+//go:generate go run go.uber.org/mock/mockgen -source granularity.go -destination ./mocks/granularity.go
 
 // GranularityCheck represents an important concept in some memory systems.  In certain memory systems
 // (video memory being an important one), certain types of allocations cannot be too close to each other.
